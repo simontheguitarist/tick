@@ -1,0 +1,9 @@
+# Compiled binary (built with `go install` / `go build`)
+/tick
+
+# Go test/coverage artifacts
+*.test
+*.out
+
+# OS / editor cruft
+.DS_Store
