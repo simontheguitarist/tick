@@ -1,60 +1,83 @@
 # Tick Design System
 
 Two faces, one identity: a terminal tool and a native iOS app that clearly
-belong together without the app cosplaying as a terminal.
+belong together. The app is the phone-sized sibling of the TUI — same
+palette, same monospaced voice, same celebration — without cosplaying as a
+terminal where a phone should behave like a phone.
 
 ## Aesthetic direction
 
-Calm list, loud celebration. Ninety-nine percent of the surface is quiet —
-system backgrounds, plain type, generous space. All personality is
-concentrated in two moments: the amber accent on interactive/important
-things, and the confetti burst when a step is crossed off.
+Dark ground in every appearance (`.preferredColorScheme(.dark)`), the TUI's
+exact hues, and restraint: colour has jobs, type is mostly mono, and the only
+loud moment is crossing a step off. The ASCII `tick` banner from the terminal
+is the app's masthead (pairing screen, projects screen).
 
 ## Typography
 
-- iOS: SF only. No serif, no rounded. Large title for the project name.
-- Monospaced is the signature voice — step numbers, counts, sync status,
-  server hostnames — always via `Font.stepNumber` / `.countLabel` /
-  `.statusLine` (Theme.swift). If it smells like the terminal, it's mono.
-- TUI: the ANSI banner + Lip Gloss styles in internal/tui/model.go.
+- Monospaced (SF Mono via `.monospaced` design) for everything structural:
+  the banner, project names, step numbers, counts, status lines, prompts
+  (`add:`, `pair:`), group headers. `Font.mono(_:_:)` + the named roles in
+  Theme.swift.
+- Plain SF for step text — readability wins for the one thing you read.
+- No serif, no rounded.
 
-## Color
+## Color (Theme.swift — the TUI's `model.go` palette, verbatim)
 
-- Accent "amber phosphor": `#B45309` light / `#FFB86C` dark (the TUI's
-  important-`!` colour). Used for: interactive controls, important steps,
-  checkmarks. Nothing else.
-- Confetti palette (celebration ONLY, never UI chrome):
-  `#a864fd #29cdff #78ff44 #ff718d #fdff6a #ffa94d` — verbatim from
-  internal/tui/confetti.go, mirrored in Theme.confetti.
-- Everything else: system semantic colors, both appearances first-class.
+| role | hex | where |
+|---|---|---|
+| ground `bg` / `surface` / `surfaceRaised` | `#0D0F14` / `#161922` / `#1D2130` | screens, cards, toasts |
+| `rule` | `#44475A` | hairlines at 35–50 % |
+| `ink` / `inkSecondary` / `inkDim` | `#F2F3F7` / `#9AA0B4` / `#5E6478` | text, previews, numbers |
+| `purple` | `#A864FD` | group headers, group tags (TUI title/group colour) |
+| `cyan` (accent) | `#29CDFF` | project names, prompts, interaction (TUI cursor) |
+| `yellow` | `#FDFF6A` | counts (TUI `countStyle`) |
+| `green` | `#78FF44` | done `✓` |
+| `pink` | `#FF718D` | the important `!`, destructive |
+| `amber` | `#FFB86C` | important text |
+
+Confetti hues (`#a864fd #29cdff #78ff44 #ff718d #fdff6a #ffa94d`) appear in
+the cross-off burst and in the app icon — nowhere in chrome.
 
 ## Spacing & layout
 
-Theme.Space: 4/8/12/16/24. Step rows: 28pt leading number slot, ≥44pt touch
-target. One project per screen — never show another project's steps.
+Theme.Space: 4/8/12/16/24. Cards: 14 pt radius, `surface` fill, `rule` stroke.
+Step rows: 34 pt leading slot, ≥44 pt touch target, hairline separators. One
+project per screen — never show another project's steps.
 
 ## Components
 
-- **Step row**: number ↔ checkmark morph in a fixed slot; strike-through +
-  text fades to secondary on done; important = semibold + accent, no badges.
-- **Add bar**: capsule on material, pinned to the bottom, keeps the keyboard
-  up (capture comes in bursts).
-- **Status line**: one mono footnote ("Synced 2 min ago" / "Offline — saved
-  on this phone"). Sync issues are never alerts.
-- **Cross-off**: persist first, then celebrate — haptic ✓, strike draw
-  (0.28s), 0.7s confetti, row leaves after 0.6s. Reduce Motion: strike +
-  check only.
+- **Banner** (`BannerView`): the six TUI rows in the banner gradient.
+- **Project card**: mono name, `› first open step` preview in secondary, the
+  open count in yellow (`—` dim when clear), chevron. Long-press: rename /
+  group, untrack. Projects are created on the Mac, never on the phone.
+- **Steps header**: `› name` in cyan mono title, `N open` in yellow beneath
+  (plus `· group` in purple). Counts never live in the toolbar.
+- **Step row**: slot shows `1.` dim, `! 1.` pink+amber when important, green
+  `✓` when done; important text amber semibold; done text struck and dim.
+  Tap = cross off; still long-press = context menu (edit, important, move to
+  top, reopen, delete); press-and-drag = reorder (no edit mode).
+- **Add bar**: `add:` prompt in cyan + field on `surface`, pinned bottom,
+  keeps the keyboard up.
+- **Status line**: `⇅ synced 2 min ago` / `⇅ offline — saved on this phone`,
+  mono, dim. Sync problems are never alerts.
+- **Cross-off**: persist first, then celebrate — haptic ✓, number→✓ morph,
+  strike draw (0.28 s), 0.7 s confetti, row leaves after 0.6 s. Reduce
+  Motion: strike + check only.
+- **App icon**: gradient check (purple→cyan→green) with a soft glow and a few
+  confetti specks on the dark ground (`ios/Shared/Assets.xcassets/AppIcon`,
+  generated by the script in the commit that added it).
 
 ## Voice & microcopy
 
-Lowercase-calm, concrete, no exclamation marks outside the `!` glyph. "Add a
-step", "All clear", "Offline — saved on this phone". The CLI speaks the same
-way ("all done — nice.").
+Lowercase-calm, concrete, terminal cadence: `add:`, `all clear`, `5 open`,
+`⇅ offline — saved on this phone`. No exclamation marks outside the `!`
+glyph.
 
 ## Design QA checklist
 
-- [ ] Light + dark screenshots: Projects, Steps, Pairing, widget S/M
-- [ ] Cross-off: haptic → strike → burst → row gone in ≤1s; Reduce Motion path
-- [ ] Accent only on interactive/important; confetti hues nowhere in chrome
-- [ ] Numbers/counts/status in mono; touch targets ≥44pt
-- [ ] VoiceOver reads "Step n, …, important/done"
+- [ ] Screenshots: Projects, Steps, Pairing, widget S/M (dark ground)
+- [ ] Banner aligned (monospaced, no wrapping) on the smallest iPhone width
+- [ ] Cross-off: haptic → strike → burst → row gone in ≤1 s; Reduce Motion path
+- [ ] Long-press opens the menu; press-and-drag reorders; both on the same row
+- [ ] Colour jobs respected: yellow = counts, cyan = interaction/names, pink/amber = important, green = done
+- [ ] Touch targets ≥44 pt; VoiceOver reads "Step n, …, important/done"

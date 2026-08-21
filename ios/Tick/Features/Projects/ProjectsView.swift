@@ -1,57 +1,63 @@
 import SwiftUI
 
-/// The overview: every project, grouped like the TUI, each row one calm line.
-/// The point of the app is to pick ONE of these and see nothing else.
+/// The overview: the terminal banner, then every project as one card, grouped
+/// like the TUI. Projects are born on the Mac (that's where the folder link
+/// lives) — here you pick one and go.
 struct ProjectsView: View {
     @Environment(AppModel.self) private var app
     @State private var showSettings = false
     @State private var editing: ProjectForm?
     @State private var confirmDelete: Project?
 
+    private var doc: StoreDocument { app.store.doc }
+
     var body: some View {
-        List {
-            ForEach(app.store.doc.sections, id: \.group) { section in
-                Section {
-                    ForEach(section.projects) { project in
-                        row(project)
-                    }
-                } header: {
-                    if let g = section.group {
-                        Text(g.uppercased())
-                            .font(.caption.weight(.semibold))
-                            .kerning(0.8)
-                    } else if app.store.doc.sections.count > 1 {
-                        Text("UNGROUPED")
-                            .font(.caption.weight(.semibold))
-                            .kerning(0.8)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.roomy) {
+                header
+                if doc.liveProjects.isEmpty {
+                    emptyState
+                } else {
+                    ForEach(doc.sections, id: \.group) { section in
+                        VStack(alignment: .leading, spacing: Theme.Space.snug) {
+                            if let g = section.group {
+                                GroupHeader(title: g)
+                            } else if doc.sections.count > 1 {
+                                GroupHeader(title: "ungrouped")
+                            }
+                            ForEach(section.projects) { project in
+                                ProjectCard(project: project, doc: doc)
+                                    .contextMenu {
+                                        Button {
+                                            editing = ProjectForm(project: project)
+                                        } label: {
+                                            Label("Rename / group", systemImage: "pencil")
+                                        }
+                                        Button(role: .destructive) {
+                                            confirmDelete = project
+                                        } label: {
+                                            Label("Untrack", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
                     }
                 }
             }
+            .padding(.horizontal, Theme.Space.base)
+            .padding(.bottom, Theme.Space.roomy)
         }
-        .navigationTitle("Tick")
-        .overlay {
-            if app.store.doc.liveProjects.isEmpty {
-                ContentUnavailableView {
-                    Label("No projects yet", systemImage: "checkmark.circle")
-                } description: {
-                    Text("Add one here, or `tick add` on your Mac — it shows up after the next sync.")
-                }
-            }
-        }
+        .background(Theme.bg)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { editing = ProjectForm() } label: { Image(systemName: "plus") }
-            }
         }
+        .toolbarBackground(.hidden, for: .navigationBar)
         .refreshable { await app.engine.syncNow() }
         .safeAreaInset(edge: .bottom) { SyncStatusLine() }
         .sheet(isPresented: $showSettings) { SettingsView() }
-        .sheet(item: $editing) { form in
-            ProjectFormSheet(form: form)
-        }
+        .sheet(item: $editing) { form in ProjectFormSheet(form: form) }
         .confirmationDialog(
             "Untrack \u{201C}\(confirmDelete?.name ?? "")\u{201D}?",
             isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
@@ -69,45 +75,111 @@ struct ProjectsView: View {
         }
     }
 
-    private func row(_ project: Project) -> some View {
-        NavigationLink(value: project.id) {
-            HStack {
-                Text(project.name)
-                    .fontWeight(.medium)
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.tight) {
+            BannerView()
+            HStack(alignment: .firstTextBaseline) {
+                Text("next steps across your projects")
+                    .font(.statusLine)
+                    .foregroundStyle(Theme.inkDim)
                 Spacer()
-                let open = app.store.doc.openCount(of: project.id)
-                Text(open == 0 ? "—" : "\(open) open")
+                let n = doc.liveProjects.count
+                Text("\(n) project\(n == 1 ? "" : "s")")
                     .font(.countLabel)
-                    .foregroundStyle(open == 0 ? .tertiary : .secondary)
-            }
-            .padding(.vertical, Theme.Space.hair)
-        }
-        .swipeActions(edge: .leading) {
-            Button {
-                editing = ProjectForm(project: project)
-            } label: {
-                Label("Edit", systemImage: "pencil")
-            }
-            .tint(.accentColor)
-        }
-        .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                confirmDelete = project
-            } label: {
-                Label("Untrack", systemImage: "trash")
+                    .foregroundStyle(Theme.yellow)
             }
         }
+        .padding(.top, Theme.Space.tight)
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.snug) {
+            Text("no projects yet")
+                .font(.projectName)
+                .foregroundStyle(Theme.inkSecondary)
+            Text("cd into one on your Mac and `tick add` a step — it shows up here after the next sync.")
+                .font(.statusLine)
+                .foregroundStyle(Theme.inkDim)
+        }
+        .padding(Theme.Space.base)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
-/// New-or-edit form state.
-struct ProjectForm: Identifiable {
-    var id: String { projectID ?? "new" }
-    var projectID: String?
-    var name = ""
-    var group = ""
+struct GroupHeader: View {
+    let title: String
+    var body: some View {
+        Text(title.uppercased())
+            .font(.groupHeader)
+            .kerning(1.4)
+            .foregroundStyle(Theme.purple)
+            .padding(.top, Theme.Space.tight)
+    }
+}
 
-    init() {}
+/// One project: name, a peek at its first next step, the open count in the
+/// TUI's count-yellow.
+struct ProjectCard: View {
+    let project: Project
+    let doc: StoreDocument
+
+    var body: some View {
+        NavigationLink(value: project.id) {
+            HStack(alignment: .center, spacing: Theme.Space.snug) {
+                VStack(alignment: .leading, spacing: Theme.Space.hair) {
+                    Text(project.name)
+                        .font(.projectName)
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    if let next = doc.steps(of: project.id, includeDone: false).first {
+                        HStack(spacing: Theme.Space.hair) {
+                            Text("›")
+                                .foregroundStyle(Theme.cyan)
+                            Text(next.text)
+                                .foregroundStyle(Theme.inkSecondary)
+                                .lineLimit(1)
+                        }
+                        .font(.statusLine)
+                    } else {
+                        Text("all clear")
+                            .font(.statusLine)
+                            .foregroundStyle(Theme.inkDim)
+                    }
+                }
+                Spacer(minLength: Theme.Space.tight)
+                OpenCountLabel(open: doc.openCount(of: project.id))
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.inkDim)
+            }
+            .padding(.horizontal, Theme.Space.base)
+            .padding(.vertical, Theme.Space.snug + 2)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.rule.opacity(0.45), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// "3 open" in count-yellow, or a dim dash.
+struct OpenCountLabel: View {
+    let open: Int
+    var body: some View {
+        Text(open == 0 ? "—" : "\(open) open")
+            .font(.countLabel)
+            .foregroundStyle(open == 0 ? Theme.inkDim : Theme.yellow)
+    }
+}
+
+/// Rename / regroup an existing project. Creation stays on the Mac.
+struct ProjectForm: Identifiable {
+    var id: String { projectID }
+    var projectID: String
+    var name: String
+    var group: String
+
     init(project: Project) {
         projectID = project.id
         name = project.name
@@ -130,7 +202,9 @@ struct ProjectFormSheet: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             }
-            .navigationTitle(form.projectID == nil ? "New project" : "Edit project")
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
+            .navigationTitle("Edit project")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -140,12 +214,7 @@ struct ProjectFormSheet: View {
                     Button("Save") {
                         let name = form.name.trimmingCharacters(in: .whitespaces)
                         guard !name.isEmpty else { return }
-                        if let id = form.projectID {
-                            app.store.editProject(id, name: name, group: form.group)
-                        } else {
-                            let p = app.store.addProject(name: name, group: form.group)
-                            app.path = [p.id]
-                        }
+                        app.store.editProject(form.projectID, name: name, group: form.group)
                         dismiss()
                     }
                     .disabled(form.name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -167,24 +236,25 @@ struct SyncStatusLine: View {
             case .syncing:
                 HStack(spacing: Theme.Space.tight) {
                     ProgressView().controlSize(.mini)
-                    Text("Syncing…")
+                    Text("⇅ syncing…")
                 }
             case .offline:
-                Text("Offline — saved on this phone")
+                Text("⇅ offline — saved on this phone")
             case .authFailed:
-                Text("Token rejected — re-pair in Settings")
-                    .foregroundStyle(.orange)
+                Text("⇅ token rejected — re-pair in settings")
+                    .foregroundStyle(Theme.pink)
             case .idle:
                 if let t = app.engine.lastSynced {
-                    Text("Synced \(t.formatted(.relative(presentation: .named)))")
+                    Text("⇅ synced \(t.formatted(.relative(presentation: .named)))")
                 } else {
                     Text(" ")
                 }
             }
         }
         .font(.statusLine)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Theme.inkDim)
         .frame(maxWidth: .infinity)
         .padding(.vertical, Theme.Space.hair)
+        .background(Theme.bg.opacity(0.9))
     }
 }

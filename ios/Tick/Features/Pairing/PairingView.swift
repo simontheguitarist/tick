@@ -13,48 +13,56 @@ struct PairingView: View {
     var body: some View {
         VStack(spacing: Theme.Space.roomy) {
             Spacer()
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 56, weight: .light))
-                .foregroundStyle(.tint)
-            VStack(spacing: Theme.Space.tight) {
-                Text("Tick")
-                    .font(.largeTitle.bold())
-                Text("Your projects' next steps,\nsynced with the tick CLI on your Mac.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            BannerView()
+            Text("your projects' next steps,\nsynced with the tick CLI on your Mac.")
+                .font(.statusLine)
+                .foregroundStyle(Theme.inkSecondary)
+                .multilineTextAlignment(.center)
             Spacer()
             VStack(spacing: Theme.Space.base) {
                 if DataScannerViewController.isSupported {
                     Button {
                         showScanner = true
                     } label: {
-                        Label("Scan pairing code", systemImage: "qrcode.viewfinder")
+                        Label("scan pairing code", systemImage: "qrcode.viewfinder")
+                            .font(.mono(.body, .semibold))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(Theme.bg)
                     .controlSize(.large)
-                    Text("Run `tick sync qr` in your terminal")
+                    Text("run  tick sync qr  in your terminal")
                         .font(.statusLine)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.inkDim)
                 }
                 VStack(spacing: Theme.Space.hair) {
-                    TextField("…or paste the tick://pair link", text: $pasted)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onSubmit(usePasted)
+                    HStack(spacing: Theme.Space.tight) {
+                        Text("pair:")
+                            .font(.mono(.body, .semibold))
+                            .foregroundStyle(Theme.cyan)
+                        TextField("", text: $pasted, prompt: Text("…or paste the tick://pair link").foregroundStyle(Theme.inkDim))
+                            .font(.statusLine)
+                            .foregroundStyle(Theme.ink)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onSubmit(usePasted)
+                    }
+                    .padding(.horizontal, Theme.Space.base)
+                    .padding(.vertical, Theme.Space.snug)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.rule.opacity(0.5), lineWidth: 1))
                     if pasteError {
-                        Text("That doesn't look like a tick://pair link.")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
+                        Text("that doesn't look like a tick://pair link")
+                            .font(.statusLine)
+                            .foregroundStyle(Theme.pink)
                     }
                 }
             }
             .padding(.horizontal, Theme.Space.roomy)
             Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.bg)
         .sheet(isPresented: $showScanner) {
             QRScannerSheet { payload in
                 showScanner = false

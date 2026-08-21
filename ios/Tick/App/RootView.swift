@@ -17,6 +17,8 @@ struct RootView: View {
                 PairingView()
             }
         }
+        .tint(Theme.cyan)
+        .preferredColorScheme(.dark) // the terminal's ground, in every appearance
         .task { app.restoreLastProject() }
         .sheet(item: $app.pendingPair) { req in
             PairConfirmSheet(request: req)
@@ -34,29 +36,32 @@ struct PairConfirmSheet: View {
         VStack(spacing: Theme.Space.roomy) {
             Image(systemName: "link")
                 .font(.largeTitle)
-                .foregroundStyle(.tint)
+                .foregroundStyle(Theme.cyan)
             Text(app.settings.isPaired ? "Replace pairing?" : "Pair with your Mac?")
-                .font(.title2.bold())
+                .font(.mono(.title2, .bold))
             Text(request.server.host() ?? request.server.absoluteString)
                 .font(.statusLine)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.yellow)
             if app.settings.isPaired {
                 Text("This replaces the current server and token.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.inkSecondary)
             }
             Button {
                 app.confirmPair(request)
                 dismiss()
             } label: {
                 Text("Connect")
+                    .font(.mono(.body, .semibold))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .foregroundStyle(Theme.bg)
             Button("Cancel") { dismiss() }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.inkSecondary)
         }
         .padding(Theme.Space.roomy)
         .presentationDetents([.medium])
+        .presentationBackground(Theme.surface)
     }
 }

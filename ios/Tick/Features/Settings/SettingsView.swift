@@ -11,8 +11,12 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Server") {
-                    LabeledContent("Address", value: app.settings.baseURL?.host() ?? "—")
-                    LabeledContent("This device", value: app.store.doc.device)
+                    LabeledContent("Address") {
+                        Text(app.settings.baseURL?.host() ?? "—").font(.statusLine)
+                    }
+                    LabeledContent("This device") {
+                        Text(app.store.doc.device).font(.statusLine)
+                    }
                     LabeledContent("Status") { SyncStatusLine() }
                     if app.store.pendingPushCount > 0 {
                         LabeledContent("Queued", value: "\(app.store.pendingPushCount) change(s)")
@@ -39,6 +43,8 @@ struct SettingsView: View {
                     Text("Steps live on this phone and sync through your own server — no accounts, one token.")
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Theme.bg)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

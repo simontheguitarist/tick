@@ -103,18 +103,29 @@ struct NextStepsWidgetView: View {
     @Environment(\.widgetFamily) private var family
     let entry: NextStepsEntry
 
+    // The TUI palette (Theme.swift lives in the app target; the widget
+    // compiles only Shared/, so the few hues it needs are repeated here).
+    private let cyan = Color(red: 0.16, green: 0.80, blue: 1.00)
+    private let yellow = Color(red: 0.99, green: 1.00, blue: 0.42)
+    private let green = Color(red: 0.47, green: 1.00, blue: 0.27)
+    private let amber = Color(red: 1.00, green: 0.72, blue: 0.42)
+    private let pink = Color(red: 1.00, green: 0.44, blue: 0.55)
+    private let ink = Color(red: 0.95, green: 0.95, blue: 0.97)
+    private let dim = Color(red: 0.37, green: 0.39, blue: 0.47)
+    private let secondary = Color(red: 0.60, green: 0.63, blue: 0.71)
+
     var body: some View {
         Group {
             if let name = entry.projectName {
                 content(name)
             } else {
                 VStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle")
-                        .font(.title3)
-                        .foregroundStyle(.tint)
-                    Text("Open Tick to get started")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("✓")
+                        .font(.system(.title3, design: .monospaced).weight(.bold))
+                        .foregroundStyle(green)
+                    Text("open tick to get started")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(secondary)
                         .multilineTextAlignment(.center)
                 }
             }
@@ -125,36 +136,35 @@ struct NextStepsWidgetView: View {
 
     private func content(_ name: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("›").foregroundStyle(dim)
                 Text(name)
-                    .font(.headline)
+                    .foregroundStyle(cyan)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(entry.openCount == 0 ? "—" : "\(entry.openCount)")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(entry.openCount == 0 ? dim : yellow)
             }
+            .font(.system(.subheadline, design: .monospaced).weight(.semibold))
             if entry.steps.isEmpty {
                 Spacer()
                 HStack(spacing: 6) {
-                    Image(systemName: "checkmark")
-                        .foregroundStyle(.tint)
-                    Text("All clear")
-                        .foregroundStyle(.secondary)
+                    Text("✓").foregroundStyle(green)
+                    Text("all clear").foregroundStyle(secondary)
                 }
-                .font(.subheadline)
+                .font(.system(.caption, design: .monospaced))
                 Spacer()
             } else {
                 let shown = family == .systemSmall ? Array(entry.steps.prefix(1)) : entry.steps
                 ForEach(shown) { line in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("\(line.number).")
-                            .font(.system(.caption, design: .monospaced).weight(.medium))
-                            .foregroundStyle(line.important ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        Text(line.important ? "!" : "\(line.number).")
+                            .font(.system(.caption, design: .monospaced).weight(.bold))
+                            .foregroundStyle(line.important ? pink : dim)
                         Text(line.text)
                             .font(family == .systemSmall ? .subheadline : .caption)
                             .fontWeight(line.important ? .semibold : .regular)
-                            .foregroundStyle(line.important ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                            .foregroundStyle(line.important ? amber : ink)
                             .lineLimit(family == .systemSmall ? 3 : 1)
                     }
                 }
@@ -162,7 +172,7 @@ struct NextStepsWidgetView: View {
                     Spacer(minLength: 0)
                     Text("+\(entry.openCount - 1) more")
                         .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(dim)
                 } else {
                     Spacer(minLength: 0)
                 }

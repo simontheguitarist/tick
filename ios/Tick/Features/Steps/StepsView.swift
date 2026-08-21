@@ -2,6 +2,7 @@ import SwiftUI
 
 /// One project's next steps — the screen the app exists for. Numbered open
 /// steps in priority order, nothing from any other project in sight.
+/// Tap crosses off, long-press opens the menu, press-and-drag reorders.
 struct StepsView: View {
     @Environment(AppModel.self) private var app
     let projectID: String
@@ -12,99 +13,89 @@ struct StepsView: View {
     @State private var editText = ""
     @State private var lastDeleted: Step?
     @State private var undoDismiss: Task<Void, Never>?
-    @State private var editMode: EditMode = .inactive
 
     private var project: Project? { app.store.doc.project(projectID) }
 
-    /// Rows on screen: open steps, done steps when shown, plus freshly
-    /// crossed-off ones still celebrating (persist first, animate after).
-    private var visibleSteps: [Step] {
-        app.store.doc.steps(of: projectID, includeDone: true).filter {
-            !$0.done || showDone || celebrating.contains($0.id)
+    /// Rows on screen with their open-number, computed once per render: open
+    /// steps, done steps when shown, plus freshly crossed-off ones still
+    /// celebrating (persist first, animate after).
+    private var rows: [(step: Step, number: Int?)] {
+        var open = 0
+        return app.store.doc.steps(of: projectID, includeDone: true).compactMap { step in
+            guard !step.done || showDone || celebrating.contains(step.id) else { return nil }
+            if step.done { return (step, nil) }
+            open += 1
+            return (step, open)
         }
     }
 
     var body: some View {
+        let rows = rows
         List {
-            let steps = visibleSteps
-            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                StepRow(
-                    step: step,
-                    number: openNumber(step, in: steps),
-                    celebrating: celebrating.contains(step.id)
-                )
-                .contentShape(Rectangle())
-                .onTapGesture { toggle(step) }
+            header
+                .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.base, bottom: Theme.Space.snug, trailing: Theme.Space.base))
                 .listRowSeparator(.hidden)
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    Button {
-                        Haptics.important()
-                        app.store.toggleImportant(step.id)
-                    } label: {
-                        Label("Important", systemImage: "exclamationmark")
-                    }
-                    .tint(.accentColor)
-                    if index > 0 {
+                .listRowBackground(Theme.bg)
+
+            ForEach(rows, id: \.step.id) { row in
+                StepRow(step: row.step, number: row.number, celebrating: celebrating.contains(row.step.id))
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggle(row.step) }
+                    .listRowBackground(Theme.bg)
+                    .listRowSeparatorTint(Theme.rule.opacity(0.35))
+                    .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.base, bottom: 0, trailing: Theme.Space.base))
+                    .contextMenu { menu(for: row.step, isFirst: rows.first?.step.id == row.step.id) }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         Button {
-                            Haptics.reorder()
-                            app.store.moveToTop(step.id, in: projectID)
+                            Haptics.important()
+                            app.store.toggleImportant(row.step.id)
                         } label: {
-                            Label("Top", systemImage: "arrow.up.to.line")
+                            Label(row.step.important ? "Normal" : "Important", systemImage: "exclamationmark")
                         }
-                        .tint(.secondary)
+                        .tint(Theme.pink)
                     }
-                }
-                .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) { delete(step) } label: {
-                        Label("Delete", systemImage: "trash")
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) { delete(row.step) } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        Button {
+                            editText = row.step.text
+                            editingStep = row.step
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .tint(Theme.inkDim)
                     }
-                    Button {
-                        editText = step.text
-                        editingStep = step
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    .tint(.secondary)
-                }
             }
             .onMove { source, destination in
                 Haptics.reorder()
-                app.store.move(in: projectID, visible: visibleSteps, from: source, to: destination)
+                app.store.move(in: projectID, visible: rows.map(\.step), from: source, to: destination)
             }
 
-            if visibleSteps.isEmpty {
-                ContentUnavailableView {
-                    Label("All clear", systemImage: "checkmark.circle")
-                } description: {
-                    Text("Nothing open here. Add the next step below.")
+            if rows.isEmpty {
+                HStack(spacing: Theme.Space.tight) {
+                    Text("✓").foregroundStyle(Theme.green)
+                    Text("all clear — add the next step below")
+                        .foregroundStyle(Theme.inkDim)
                 }
+                .font(.statusLine)
+                .listRowBackground(Theme.bg)
                 .listRowSeparator(.hidden)
             }
         }
         .listStyle(.plain)
-        .environment(\.editMode, $editMode)
-        .navigationTitle(project?.name ?? "")
-        .navigationBarTitleDisplayMode(.large)
+        .scrollContentBackground(.hidden)
+        .background(Theme.bg)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Toggle(isOn: $showDone) {
-                        Label("Show done", systemImage: "eye")
-                    }
-                    Button {
-                        withAnimation { editMode = editMode == .active ? .inactive : .active }
-                    } label: {
-                        Label(editMode == .active ? "Done reordering" : "Reorder", systemImage: "arrow.up.arrow.down")
-                    }
+                Button {
+                    withAnimation(.snappy) { showDone.toggle() }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: showDone ? "eye" : "eye.slash")
                 }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                let open = app.store.doc.openCount(of: projectID)
-                Text(open == 0 ? "—" : "\(open) open")
-                    .font(.countLabel)
-                    .foregroundStyle(.secondary)
+                .accessibilityLabel(showDone ? "Hide done steps" : "Show done steps")
             }
         }
         .refreshable { await app.engine.syncNow() }
@@ -119,6 +110,7 @@ struct StepsView: View {
                 }
                 AddStepBar { app.store.addStep($0, to: projectID) }
             }
+            .background(Theme.bg.opacity(0.92))
         }
         .alert("Edit step", isPresented: Binding(
             get: { editingStep != nil },
@@ -139,19 +131,71 @@ struct StepsView: View {
         }
     }
 
-    /// 1-based position among open steps (done rows carry no number).
-    private func openNumber(_ step: Step, in steps: [Step]) -> Int? {
-        if step.done { return nil }
-        var n = 0
-        for s in steps where !s.done {
-            n += 1
-            if s.id == step.id { return n }
+    /// Project name and its numbers, in the banner's voice: "› name" in
+    /// cyan like the TUI header, the open count in count-yellow underneath.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.hair) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.tight) {
+                Text("›")
+                    .font(.screenTitle)
+                    .foregroundStyle(Theme.inkDim)
+                Text(project?.name ?? "")
+                    .font(.screenTitle)
+                    .foregroundStyle(Theme.cyan)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+            }
+            HStack(spacing: Theme.Space.snug) {
+                let open = app.store.doc.openCount(of: projectID)
+                Text(open == 0 ? "nothing open" : "\(open) open")
+                    .foregroundStyle(open == 0 ? Theme.inkDim : Theme.yellow)
+                if let g = project?.group {
+                    Text("· \(g)")
+                        .foregroundStyle(Theme.purple)
+                }
+            }
+            .font(.statusLine)
         }
-        return nil
+        .padding(.top, Theme.Space.tight)
+    }
+
+    @ViewBuilder
+    private func menu(for step: Step, isFirst: Bool) -> some View {
+        Button {
+            editText = step.text
+            editingStep = step
+        } label: {
+            Label("Edit", systemImage: "pencil")
+        }
+        Button {
+            Haptics.important()
+            app.store.toggleImportant(step.id)
+        } label: {
+            Label(step.important ? "Not important" : "Important", systemImage: "exclamationmark")
+        }
+        if !isFirst && !step.done {
+            Button {
+                Haptics.reorder()
+                app.store.moveToTop(step.id, in: projectID)
+            } label: {
+                Label("Move to top", systemImage: "arrow.up.to.line")
+            }
+        }
+        if step.done {
+            Button {
+                Haptics.reopen()
+                app.store.toggleDone(step.id)
+            } label: {
+                Label("Reopen", systemImage: "arrow.uturn.backward")
+            }
+        }
+        Divider()
+        Button(role: .destructive) { delete(step) } label: {
+            Label("Delete", systemImage: "trash")
+        }
     }
 
     private func toggle(_ step: Step) {
-        guard editMode == .inactive else { return }
         if step.done && !celebrating.contains(step.id) {
             Haptics.reopen()
             app.store.toggleDone(step.id)
@@ -172,8 +216,8 @@ struct StepsView: View {
 
     private func delete(_ step: Step) {
         Haptics.delete()
-        app.store.deleteStep(step.id)
-        lastDeleted = step
+        guard let deleted = app.store.deleteStep(step.id) else { return }
+        lastDeleted = deleted
         undoDismiss?.cancel()
         undoDismiss = Task {
             try? await Task.sleep(for: .seconds(5))
@@ -189,17 +233,18 @@ struct UndoToast: View {
 
     var body: some View {
         HStack {
-            Text("Deleted \u{201C}\(text.prefix(28))\(text.count > 28 ? "…" : "")\u{201D}")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            Text("deleted \u{201C}\(text.prefix(28))\(text.count > 28 ? "…" : "")\u{201D}")
+                .font(.statusLine)
+                .foregroundStyle(Theme.inkSecondary)
                 .lineLimit(1)
             Spacer()
-            Button("Undo", action: undo)
-                .font(.footnote.weight(.semibold))
+            Button("undo", action: undo)
+                .font(.mono(.footnote, .semibold))
+                .foregroundStyle(Theme.cyan)
         }
         .padding(.horizontal, Theme.Space.base)
         .padding(.vertical, Theme.Space.snug)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, Theme.Space.base)
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
