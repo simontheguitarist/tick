@@ -137,6 +137,9 @@ func (m model) stepsView() string {
 	} else {
 		b.WriteString("  " + helpStyle.Render("x done · a add · e edit · i ! · t top · ⇧↑/↓ move · d del · u undo · y copy · h show-done · esc back · q quit") + "\n")
 	}
+	if m.syncInfo != "" {
+		b.WriteString("  " + dimStyle.Render("⇅ "+m.syncInfo) + "\n")
+	}
 	if m.status != "" {
 		b.WriteString("  " + statusStyle.Render(m.status) + "\n")
 	}
@@ -156,7 +159,7 @@ func (m model) handleStepsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q":
-		return m, tea.Quit
+		return m.maybeQuit()
 	case "esc", "g":
 		m.mode = modeOverview
 		m.refreshFromDisk()
@@ -172,13 +175,17 @@ func (m model) handleStepsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "shift+up", "K": // move the selected step up
-		return m.moveSelected(idxs, true), nil
+		m = m.moveSelected(idxs, true)
+		return m, m.scheduleSyncCmd()
 	case "shift+down", "J": // move the selected step down
-		return m.moveSelected(idxs, false), nil
+		m = m.moveSelected(idxs, false)
+		return m, m.scheduleSyncCmd()
 	case "t": // bump the selected step to priority #1
-		return m.moveToTop(idxs), nil
+		m = m.moveToTop(idxs)
+		return m, m.scheduleSyncCmd()
 	case "i": // toggle importance (visual flag; does not reorder)
-		return m.toggleImportant(idxs), nil
+		m = m.toggleImportant(idxs)
+		return m, m.scheduleSyncCmd()
 	case "y": // copy the project's path so you can cd to it elsewhere
 		m.status = "copied path"
 		return m, tea.SetClipboard(m.projKey)
@@ -196,11 +203,17 @@ func (m model) handleStepsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "d":
-		return m.deleteSelected(idxs), nil
+		m = m.deleteSelected(idxs)
+		return m, m.scheduleSyncCmd()
 	case "u":
-		return m.undoLast(), nil
+		m = m.undoLast()
+		return m, m.scheduleSyncCmd()
 	case "x", "enter", "space":
-		return m.toggleSelected(idxs)
+		next, cmd := m.toggleSelected(idxs)
+		if nm, ok := next.(model); ok {
+			return nm, tea.Batch(cmd, nm.scheduleSyncCmd())
+		}
+		return next, cmd
 	}
 	return m, nil
 }

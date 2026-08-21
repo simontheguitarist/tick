@@ -112,26 +112,31 @@ const (
 // no-op when sync isn't configured, TICK_NO_SYNC=1, or a recent failure set a
 // backoff. Outcome lands in sync.json for `tick sync status` — never on the
 // terminal, so offline work stays noise-free.
-func Auto() {
+func Auto() { RunOnce(autoDeadline) }
+
+// RunOnce performs one configured sync with the given deadline and records
+// the outcome. ran=false means it didn't even try: sync not set up,
+// TICK_NO_SYNC=1, or still backing off after a failure.
+func RunOnce(timeout time.Duration) (res Result, ran bool, err error) {
 	if os.Getenv("TICK_NO_SYNC") == "1" {
-		return
+		return Result{}, false, nil
 	}
 	d, err := store.DefaultDir()
 	if err != nil {
-		return
+		return Result{}, false, err
 	}
 	cfg, err := LoadConfig(d)
 	if cfg == nil || err != nil {
-		return
+		return Result{}, false, err
 	}
 	if time.Now().Before(cfg.BackoffUntil) {
-		return
+		return Result{}, false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), autoDeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	c := NewClient(d, cfg)
-	_, err = c.Sync(ctx, false)
+	res, err = NewClient(d, cfg).Sync(ctx, false)
 	Record(d, cfg, err)
+	return res, true, err
 }
 
 // Record notes a sync outcome in the config (best effort).

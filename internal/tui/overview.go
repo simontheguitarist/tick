@@ -165,6 +165,9 @@ func (m model) overviewView() string {
 	default:
 		b.WriteString("  " + helpStyle.Render("enter open · g group · y copy path · d untrack · q quit") + "\n")
 	}
+	if m.syncInfo != "" {
+		b.WriteString("  " + dimStyle.Render("⇅ "+m.syncInfo) + "\n")
+	}
 	if m.status != "" {
 		b.WriteString("  " + statusStyle.Render(m.status) + "\n")
 	}
@@ -181,7 +184,7 @@ func (m model) handleOverviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q", "esc":
-		return m, tea.Quit
+		return m.maybeQuit()
 	case "up", "k":
 		if i := m.firstSelectable(items, m.ovCursor-1, -1); i >= 0 {
 			m.ovCursor = i
@@ -193,7 +196,8 @@ func (m model) handleOverviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter", "l", "space":
-		return m.openSelected(items), nil
+		m = m.openSelected(items)
+		return m, m.scheduleSyncCmd()
 	case "g": // assign the selected project to a group
 		if p := m.selectedProject(items); p != nil {
 			m.assignTarget = store.Key(p)
