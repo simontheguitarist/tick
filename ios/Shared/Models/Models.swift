@@ -69,6 +69,23 @@ enum TickTime {
     }
 }
 
+/// Wire field limits (docs/protocol.md). The server rejects a whole batch
+/// over these, so every input path clamps to them at the source.
+enum Limits {
+    static let text = 4096
+    static let name = 256
+    static let group = 128
+}
+
+extension String {
+    /// At most `maxBytes` of UTF-8, cut on a character boundary.
+    func clampedUTF8(_ maxBytes: Int) -> String {
+        var s = self
+        while s.utf8.count > maxBytes { s.removeLast() }
+        return s
+    }
+}
+
 /// A project. `path` is Mac-side metadata (where the repo lives); the phone
 /// stores and echoes it opaquely so a push never strips it. An entity with
 /// `deleted` is a tombstone: it stays in the document while `dirty`, and the

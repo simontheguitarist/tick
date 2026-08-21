@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -91,13 +92,13 @@ func TestLandingRedirectAndHealthz(t *testing.T) {
 func TestValidationRejects(t *testing.T) {
 	srv, _ := newTestServer(t)
 	cases := []protocol.SyncRequest{
-		{},                          // no device
-		{Device: "a", Steps: []protocol.Step{{ID: "s1", Updated: "2026-01-01T00:00:00.000Z"}}},                                      // no project_id
-		{Device: "a", Steps: []protocol.Step{step("s1", "p1", "x", "V", "not-a-time")}},                                             // bad time
-		{Device: "a", Steps: []protocol.Step{step("s1", "p1", "x", "V0", "2026-01-01T00:00:00.000Z")}},                              // invalid rank
-		{Device: "a", Steps: []protocol.Step{step("s1", "p1", "", "V", "2026-01-01T00:00:00.000Z")}},                                // empty text
-		{Device: "a", Steps: []protocol.Step{step("s1", "p1", strings.Repeat("x", 5000), "V", "2026-01-01T00:00:00.000Z")}},         // text too long
-		{Device: "a", Projects: []protocol.Project{{ID: "p1", Updated: "2026-01-01T00:00:00.000Z"}}},                                // live project, no name
+		{}, // no device
+		{Device: "a", Steps: []protocol.Step{{ID: "s1", Updated: "2026-01-01T00:00:00.000Z"}}},                              // no project_id
+		{Device: "a", Steps: []protocol.Step{step("s1", "p1", "x", "V", "not-a-time")}},                                     // bad time
+		{Device: "a", Steps: []protocol.Step{step("s1", "p1", "x", "V0", "2026-01-01T00:00:00.000Z")}},                      // invalid rank
+		{Device: "a", Steps: []protocol.Step{step("s1", "p1", "", "V", "2026-01-01T00:00:00.000Z")}},                        // empty text
+		{Device: "a", Steps: []protocol.Step{step("s1", "p1", strings.Repeat("x", 5000), "V", "2026-01-01T00:00:00.000Z")}}, // text too long
+		{Device: "a", Projects: []protocol.Project{{ID: "p1", Updated: "2026-01-01T00:00:00.000Z"}}},                        // live project, no name
 	}
 	for i, req := range cases {
 		if res, _ := postSync(t, srv, testToken, req); res.StatusCode != http.StatusBadRequest {
@@ -232,5 +233,25 @@ func TestBodyLimit(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized body: %d, want 400", res.StatusCode)
+	}
+}
+
+func TestFailedSaveRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.dir = filepath.Join(dir, "does-not-exist") // make the next save fail
+	_, err = st.Apply(protocol.SyncRequest{Device: "a",
+		Steps: []protocol.Step{step("s1", "p1", "lost?", "V", "2026-01-01T00:00:00.000Z")}})
+	if err == nil {
+		t.Fatal("save must fail")
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.doc.Seq != 0 || len(st.doc.Steps) != 0 {
+		t.Fatalf("memory advanced past disk after a failed save: seq=%d steps=%d", st.doc.Seq, len(st.doc.Steps))
 	}
 }

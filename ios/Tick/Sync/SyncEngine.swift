@@ -21,9 +21,12 @@ final class SyncEngine {
     private let store: Store
     private let makeTransport: @MainActor () -> (any SyncTransport)?
     private var pending: Task<Void, Never>?
-    private var running = false
     private var rerun = false
     private var failures = 0
+    /// Bumped by a full resync so an exchange that was in flight against the
+    /// old cursor/dirty state is discarded instead of applied to the reset
+    /// document.
+    private var generation = 0
 
     init(store: Store, makeTransport: @escaping @MainActor () -> (any SyncTransport)?) {
         self.store = store
@@ -55,17 +58,16 @@ final class SyncEngine {
 
     /// Re-push and re-pull the world (pairing, "re-sync everything").
     func fullResync() async {
+        generation += 1
         store.markAllDirtyAndResetCursor()
         await syncNow()
     }
 
     private func runOnce() async {
-        if running {
+        if status == .syncing {
             rerun = true
             return
         }
-        running = true
-        defer { running = false }
         repeat {
             rerun = false
             await exchange()
@@ -75,11 +77,17 @@ final class SyncEngine {
     private func exchange() async {
         guard let transport = makeTransport() else { return }
         status = .syncing
+        let gen = generation
         let req = Merge.buildRequest(store.doc)
         do {
             let resp = try await transport.sync(req)
-            let (merged, _) = Merge.apply(response: resp, request: req, to: store.doc)
-            store.applyMerged(merged)
+            guard gen == generation else { // superseded by a full resync mid-flight
+                status = .idle
+                rerun = true
+                return
+            }
+            let (merged, pulled) = Merge.apply(response: resp, request: req, to: store.doc)
+            store.applyMerged(merged, pulled: pulled)
             lastSynced = .now
             status = .idle
             failures = 0

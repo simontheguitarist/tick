@@ -6,7 +6,32 @@
 // diverging silently. docs/protocol.md is the human-readable contract.
 package protocol
 
-import "time"
+import (
+	"time"
+	"unicode/utf8"
+)
+
+// Field limits, enforced by the server and clamped by every client at input
+// time so one oversized entry can never wedge a device's sync.
+const (
+	MaxIDLen   = 64
+	MaxText    = 4096
+	MaxName    = 256
+	MaxGroup   = 128
+	MaxPath    = 1024
+	MaxRankLen = 128
+)
+
+// Clamp truncates s to at most max bytes on a rune boundary.
+func Clamp(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
+}
 
 // TimeFormat is the canonical wire timestamp: fixed-width UTC with
 // milliseconds. Fixed width means lexicographic comparison equals time

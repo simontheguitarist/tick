@@ -33,7 +33,7 @@ struct ProjectQuery: EntityQuery {
     }
 
     private func all() -> [ProjectEntity] {
-        (StoreFile.appGroup().read()?.liveProjects ?? []).map { ProjectEntity(id: $0.id, name: $0.name) }
+        ((try? StoreFile.appGroup().read())??.liveProjects ?? []).map { ProjectEntity(id: $0.id, name: $0.name) }
     }
 }
 
@@ -81,7 +81,7 @@ struct NextStepsProvider: AppIntentTimelineProvider {
     }
 
     private func entry(for configuration: SelectProjectIntent) -> NextStepsEntry {
-        guard let doc = StoreFile.appGroup().read() else {
+        guard let doc = (try? StoreFile.appGroup().read()) ?? nil else {
             return NextStepsEntry(date: .now, projectID: nil, projectName: nil, steps: [], openCount: 0)
         }
         let project = configuration.project.flatMap { doc.project($0.id) } ?? doc.mostRecentlyActiveProject

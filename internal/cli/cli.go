@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simontheguitarist/tick/internal/protocol"
 	"github.com/simontheguitarist/tick/internal/store"
 )
 
@@ -166,8 +167,10 @@ func Undone(projPath, projName string, nums []int) error {
 		}
 		for _, n := range nums {
 			st := &p.Steps[n-1]
-			st.Done, st.DoneAt = false, nil
-			store.Touch(st)
+			if st.Done { // a no-op reopen must not become a write that outranks a remote edit
+				st.Done, st.DoneAt = false, nil
+				store.Touch(st)
+			}
 			msgs = append(msgs, fmt.Sprintf("○ %s", st.Text))
 		}
 		return nil
@@ -216,7 +219,7 @@ func Edit(projPath, projName string, n int, text string) error {
 		if err := validate(p, []int{n}); err != nil {
 			return err
 		}
-		p.Steps[n-1].Text = text
+		p.Steps[n-1].Text = protocol.Clamp(text, protocol.MaxText)
 		store.Touch(&p.Steps[n-1])
 		return nil
 	}); err != nil {
@@ -323,13 +326,16 @@ func Clear(projPath, projName string, allProjects bool) error {
 }
 
 // Link attaches an unlinked project (created on another device) to the
-// current directory. With no argument it matches by the directory's name.
+// current directory. With no argument it matches by the directory's name;
+// an explicit argument may also be an id prefix (8+ chars, so a short
+// directory name can never accidentally match a UUID).
 func Link(arg string) error {
 	_, root, name, err := ResolveProject(nil)
 	if err != nil {
 		return err
 	}
 	target := strings.TrimSpace(arg)
+	byPrefix := len(target) >= 8
 	if target == "" {
 		target = name
 	}
@@ -344,7 +350,7 @@ func Link(arg string) error {
 			if p.Path != "" {
 				continue
 			}
-			if p.Name == target || strings.HasPrefix(p.ID, target) {
+			if p.Name == target || (byPrefix && strings.HasPrefix(p.ID, target)) {
 				match, matches = p, matches+1
 			}
 		}

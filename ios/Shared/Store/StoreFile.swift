@@ -9,17 +9,22 @@ struct StoreFile: Sendable {
     let url: URL
 
     static func appGroup() -> StoreFile {
-        let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        // No silent fallback: a build without the App Group entitlement would
+        // give the app and the widget two different stores and nobody would
+        // notice until steps "vanished". Fail where the misconfiguration is.
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) else {
+            preconditionFailure("App Group \(appGroupID) is missing from the entitlements")
+        }
         return StoreFile(url: base.appendingPathComponent("store.json"))
     }
 
-    /// nil when the file doesn't exist yet or can't be parsed — the caller
-    /// starts fresh rather than crashing on a corrupt document.
-    func read() -> StoreDocument? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? TickTime.decoder().decode(StoreDocument.self, from: data)
+    /// nil when no document exists yet; throws when one exists but can't be
+    /// parsed — the caller decides what to do with a corrupt file, it is
+    /// never silently overwritten.
+    func read() throws -> StoreDocument? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data = try Data(contentsOf: url)
+        return try TickTime.decoder().decode(StoreDocument.self, from: data)
     }
 
     func write(_ doc: StoreDocument) throws {

@@ -5,8 +5,9 @@
 // Schema v2 gives every project and step a UUID, a fractional-index rank
 // (steps are kept sorted by it), an `updated` stamp and a `dirty` flag, plus a
 // tombstone list for deletions — together the whole state a two-way sync
-// needs, while keeping the v1 reader-visible shape (a `projects` map with
-// `text`/`done`/`done_at` steps) intact for external consumers.
+// needs. The keys external readers depend on survive unchanged: `projects`
+// is still a map, steps keep `text`/`done`/`done_at`/`created` with their
+// local-offset timestamps (v1's `modified` is gone; nothing read it).
 package store
 
 import (
@@ -19,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/simontheguitarist/tick/internal/atomicfile"
+	"github.com/simontheguitarist/tick/internal/protocol"
 	"github.com/simontheguitarist/tick/internal/rank"
 )
 
@@ -109,7 +112,9 @@ func (p *Project) OpenCount() int {
 	return n
 }
 
-// AddStep appends a new open step after the current last one.
+// AddStep appends a new open step after the current last one. Text is
+// clamped to the wire limit here, at the source, so no client can mint a
+// step the server would reject.
 func (p *Project) AddStep(text string) *Step {
 	last := ""
 	if len(p.Steps) > 0 {
@@ -117,7 +122,7 @@ func (p *Project) AddStep(text string) *Step {
 	}
 	now := Now()
 	p.Steps = append(p.Steps, Step{
-		ID: NewID(), Text: text, Created: now,
+		ID: NewID(), Text: protocol.Clamp(text, protocol.MaxText), Created: now,
 		Rank: rank.After(last), Updated: now, Dirty: true,
 	})
 	return &p.Steps[len(p.Steps)-1]
@@ -144,20 +149,31 @@ func (p *Project) StepIndex(id string) int {
 	return -1
 }
 
-// Rebalance re-keys every step with evenly spread ranks once any rank has
-// grown past rank.MaxLen. All steps become dirty; concurrent remote moves are
-// resolved by last-writer-wins like any other edit.
+// Rebalance re-keys every step with evenly spread ranks when any rank has
+// grown past rank.MaxLen or two steps share a rank (two devices appending
+// offline both mint After(last); an undo can bring back a rank that was
+// reused). Duplicates leave no room to move between the two, so callers
+// rebalance before computing a move. All steps become dirty; concurrent
+// remote moves resolve by last-writer-wins like any other edit.
 func (p *Project) Rebalance() {
+	if !p.NeedsRebalance() {
+		return
+	}
+	n := len(p.Steps)
+	for j := range p.Steps {
+		p.Steps[j].Rank = rank.Initial(j, n)
+		Touch(&p.Steps[j])
+	}
+}
+
+// NeedsRebalance reports overlong or duplicate ranks (steps must be sorted).
+func (p *Project) NeedsRebalance() bool {
 	for i := range p.Steps {
-		if len(p.Steps[i].Rank) > rank.MaxLen {
-			n := len(p.Steps)
-			for j := range p.Steps {
-				p.Steps[j].Rank = rank.Initial(j, n)
-				Touch(&p.Steps[j])
-			}
-			return
+		if len(p.Steps[i].Rank) > rank.MaxLen || (i > 0 && p.Steps[i].Rank == p.Steps[i-1].Rank) {
+			return true
 		}
 	}
+	return false
 }
 
 // Ensure returns the project for path, creating it if absent. If exactly one
@@ -178,7 +194,8 @@ func (s *Store) Ensure(path, name string) *Project {
 		s.Link(match, path)
 		return match
 	}
-	p := &Project{ID: NewID(), Path: path, Name: name, Steps: []Step{}, Updated: Now(), Dirty: true}
+	p := &Project{ID: NewID(), Path: path, Name: protocol.Clamp(name, protocol.MaxName),
+		Steps: []Step{}, Updated: Now(), Dirty: true}
 	s.Projects[path] = p
 	return p
 }
@@ -202,29 +219,37 @@ func (s *Store) ByID(id string) *Project {
 }
 
 // Untrack removes a whole project, leaving tombstones for it and every step so
-// the deletion propagates.
+// the deletion propagates. Each step's tombstone is stamped from that step's
+// own clock: a step edited elsewhere later than this project's stamp must
+// still lose to its deletion.
 func (s *Store) Untrack(p *Project) {
-	now := Bump(p.Updated)
-	for i := range p.Steps {
-		s.Tombstones = append(s.Tombstones, Tombstone{Kind: "step", ID: p.Steps[i].ID, ProjectID: p.ID, Updated: now})
+	for len(p.Steps) > 0 {
+		s.RemoveStep(p, len(p.Steps)-1)
 	}
-	s.Tombstones = append(s.Tombstones, Tombstone{Kind: "project", ID: p.ID, Updated: now})
+	s.Tombstones = append(s.Tombstones, Tombstone{Kind: "project", ID: p.ID, Updated: Bump(p.Updated)})
 	delete(s.Projects, Key(p))
 }
 
-// RemoveStep deletes the step at index i, leaving a tombstone. It returns the
-// removed step so callers can offer undo.
+// RemoveStep deletes the step at index i, leaving a tombstone. The returned
+// copy carries the tombstone's stamp, so a later RestoreStep always lands
+// strictly after the deletion even when the device clock lags.
 func (s *Store) RemoveStep(p *Project, i int) Step {
 	st := p.Steps[i]
-	s.Tombstones = append(s.Tombstones, Tombstone{Kind: "step", ID: st.ID, ProjectID: p.ID, Updated: Bump(st.Updated)})
+	st.Updated = Bump(st.Updated)
+	s.Tombstones = append(s.Tombstones, Tombstone{Kind: "step", ID: st.ID, ProjectID: p.ID, Updated: st.Updated})
 	p.Steps = append(p.Steps[:i], p.Steps[i+1:]...)
 	return st
 }
 
 // RestoreStep undoes a RemoveStep: the pending tombstone is dropped and the
-// step re-enters with a fresh stamp, so even a tombstone that already reached
-// the server is overridden by the newer write.
+// step re-enters with a stamp after the tombstone's, so even a deletion that
+// already reached the server is overridden. If the step is live again
+// already (a newer edit from another device won over the deletion), that
+// newer version stays — undo must not overwrite it with the stale copy.
 func (s *Store) RestoreStep(p *Project, st Step) *Step {
+	if i := p.StepIndex(st.ID); i >= 0 {
+		return &p.Steps[i]
+	}
 	for i := range s.Tombstones {
 		if s.Tombstones[i].Kind == "step" && s.Tombstones[i].ID == st.ID {
 			s.Tombstones = append(s.Tombstones[:i], s.Tombstones[i+1:]...)
@@ -284,13 +309,17 @@ func Update(fn func(*Store) error) (*Store, error) {
 // Load reads the store in d. A v1 file is migrated — and immediately persisted
 // through Update, because migration mints random IDs: without the write-back,
 // two consecutive reads would see two different identities for the same step.
+// If the write-back is impossible (read-only config dir) the in-memory
+// migration is still served, so read-only commands keep working.
 func (d Dir) Load() (*Store, error) {
 	s, err := load(string(d))
 	if err != nil {
 		return nil, err
 	}
 	if s.migrated {
-		return d.Update(func(*Store) error { return nil })
+		if persisted, err := d.Update(func(*Store) error { return nil }); err == nil {
+			return persisted, nil
+		}
 	}
 	return s, nil
 }
@@ -380,35 +409,13 @@ func backupV1(dir string) {
 	}
 }
 
-// save writes the store atomically: a temp file in the same directory, synced,
-// then renamed over store.json. rename(2) on one filesystem is atomic, so a
-// crash mid-write never leaves a half-written store.
+// save writes the store atomically (temp file, fsync, rename), so a crash
+// mid-write never leaves a half-written store.
 func save(dir string, s *Store) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	s.Version = schemaVersion
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, "store-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, filepath.Join(dir, "store.json"))
+	return atomicfile.WriteFile(filepath.Join(dir, "store.json"), data, 0o600)
 }

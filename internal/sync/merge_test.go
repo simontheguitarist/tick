@@ -176,3 +176,30 @@ func TestApplyProjectTombstone(t *testing.T) {
 		t.Fatalf("untracked-elsewhere project survived: %+v", s.Projects)
 	}
 }
+
+func TestApplyEqualStampTieFollowsServer(t *testing.T) {
+	// Both devices edited in the same ms; the server picked the other device
+	// (tie-break by device id) and echoes its version. Our copy is clean
+	// (already acked) with the same stamp but different text: we must adopt.
+	s := baseStore()
+	p := s.Projects["/local/proj"]
+	p.Steps[0].Text = "ours"
+	p.Steps[0].Dirty = false
+	resp := protocol.SyncResponse{Seq: 2, Steps: []protocol.Step{{
+		ID: "s1", ProjectID: "p1", Text: "theirs", Rank: "V",
+		Created: "2026-01-01T00:00:00.000Z", Updated: protocol.FormatTime(p.Steps[0].Updated),
+	}}}
+	Apply(s, protocol.SyncRequest{}, resp)
+	if p.Steps[0].Text != "theirs" {
+		t.Fatalf("tie-loser must converge to the server's winner, got %q", p.Steps[0].Text)
+	}
+	// An echo of our own identical record is a no-op (no churn).
+	before := p.Steps[0]
+	Apply(s, protocol.SyncRequest{}, protocol.SyncResponse{Seq: 3, Steps: []protocol.Step{{
+		ID: "s1", ProjectID: "p1", Text: "theirs", Rank: "V",
+		Created: "2026-01-01T00:00:00.000Z", Updated: protocol.FormatTime(p.Steps[0].Updated),
+	}}})
+	if p.Steps[0] != before {
+		t.Fatal("identical echo must not rewrite the local record")
+	}
+}

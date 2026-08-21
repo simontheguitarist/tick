@@ -182,12 +182,13 @@ type model struct {
 
 	ovCursor int // overview selection
 
-	projKey string // selected project's store key (its path, or its id when unlinked)
+	projKey  string // selected project's store key (its path, or its id when unlinked)
+	projID   string // the same project's id — survives a re-key when it gets linked
 	stCursor int    // steps selection
 	showDone bool
 
 	input        *textInput    // non-nil while adding/editing/grouping
-	editTarget   int           // full step index being edited (when input is an edit)
+	editTarget   string        // id of the step being edited (when input is an edit); an id, not an index, so a background pull can't retarget the edit
 	assignTarget string        // project path being assigned a group (when input is a group prompt)
 	confirm      *confirmState // non-nil while confirming an untrack
 	conf         *system       // confetti
@@ -302,9 +303,9 @@ func RunAuto() error {
 	if err != nil {
 		return err
 	}
-	if _, ok := m.st.Projects[m.curPath]; ok {
+	if p, ok := m.st.Projects[m.curPath]; ok {
 		m.mode = modeSteps
-		m.projKey = m.curPath
+		m.projKey, m.projID = m.curPath, p.ID
 	} else {
 		m.mode = modeOverview
 		m = m.clampOvCursor()
@@ -555,7 +556,7 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		val := strings.TrimSpace(m.input.string())
 		prompt := m.input.prompt
-		idx := m.editTarget
+		editID := m.editTarget
 		path := m.assignTarget
 		m.input = nil
 		m.assignTarget = ""
@@ -570,7 +571,7 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if val == "" {
 				return m, nil
 			}
-			m = m.commitEdit(idx, val)
+			m = m.commitEdit(editID, val)
 			return m, m.scheduleSyncCmd()
 		case groupPrompt:
 			m = m.commitGroup(path, val) // blank clears the group

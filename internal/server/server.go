@@ -16,16 +16,17 @@ import (
 	"github.com/simontheguitarist/tick/internal/rank"
 )
 
-// Field limits: generous for humans, tight enough that a leaked token can't
-// turn the store into a blob dump.
+// Body cap: generous for humans, tight enough that a leaked token can't turn
+// the store into a blob dump. Field limits live in protocol so clients clamp
+// to the same numbers.
 const (
 	maxBody  = 4 << 20
-	maxID    = 64
-	maxText  = 4096
-	maxName  = 256
-	maxGroup = 128
-	maxPath  = 1024
-	maxRank  = 128
+	maxID    = protocol.MaxIDLen
+	maxText  = protocol.MaxText
+	maxName  = protocol.MaxName
+	maxGroup = protocol.MaxGroup
+	maxPath  = protocol.MaxPath
+	maxRank  = protocol.MaxRankLen
 )
 
 // New assembles the handler. token authenticates /v1/*; landingURL is where a

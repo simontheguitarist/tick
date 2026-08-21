@@ -60,6 +60,9 @@ func (c *Client) Sync(ctx context.Context, full bool) (Result, error) {
 	}
 
 	res := Result{Pushed: len(req.Projects) + len(req.Steps), Seq: resp.Seq}
+	if res.Pushed == 0 && len(resp.Projects)+len(resp.Steps) == 0 && resp.Seq == snap.Sync.Since {
+		return res, nil // nothing to ack or apply: skip the locked fsync'd rewrite
+	}
 	if _, err := c.Dir.Update(func(s *store.Store) error {
 		res.Pulled = Apply(s, req, *resp)
 		return nil
@@ -139,13 +142,21 @@ func RunOnce(timeout time.Duration) (res Result, ran bool, err error) {
 	return res, true, err
 }
 
-// Record notes a sync outcome in the config (best effort).
+// Record notes a sync outcome in the config (best effort). Successes are
+// written at most once a minute — every CLI command syncs, and a disk write
+// whose only payload is a timestamp isn't worth paying each time.
 func Record(d store.Dir, cfg *Config, err error) {
-	if err == nil {
-		cfg.LastOK, cfg.LastError, cfg.BackoffUntil = time.Now(), "", time.Time{}
-	} else {
+	now := time.Now()
+	if err != nil {
 		cfg.LastError = err.Error()
-		cfg.BackoffUntil = time.Now().Add(autoBackoff)
+		cfg.BackoffUntil = now.Add(autoBackoff)
+		_ = cfg.Save(d)
+		return
 	}
-	_ = cfg.Save(d)
+	transition := cfg.LastError != "" || !cfg.BackoffUntil.IsZero()
+	stale := now.Sub(cfg.LastOK) > time.Minute
+	cfg.LastOK, cfg.LastError, cfg.BackoffUntil = now, "", time.Time{}
+	if transition || stale {
+		_ = cfg.Save(d)
+	}
 }

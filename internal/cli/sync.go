@@ -56,6 +56,9 @@ func SyncSetup(rawURL string) error {
 	if host == "" {
 		host = "device"
 	}
+	if len(host) > 40 { // the server caps device ids at 64 bytes
+		host = host[:40]
+	}
 	cfg := &tsync.Config{URL: u, Token: token, Device: host + "-" + store.NewID()[:8]}
 
 	ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
@@ -88,17 +91,8 @@ func SyncStatus() error {
 	if err != nil {
 		return err
 	}
-	dirty := len(s.Tombstones)
-	for _, p := range s.Projects {
-		if p.Dirty {
-			dirty++
-		}
-		for i := range p.Steps {
-			if p.Steps[i].Dirty {
-				dirty++
-			}
-		}
-	}
+	outbox := tsync.BuildRequest(s, cfg.Device, s.Sync.Since)
+	dirty := len(outbox.Projects) + len(outbox.Steps)
 	fmt.Printf("server   %s\n", cfg.URL)
 	fmt.Printf("device   %s\n", cfg.Device)
 	if !cfg.LastOK.IsZero() {

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 // drain runs a cmd (possibly a batch) and returns every message it yields.
@@ -91,4 +93,33 @@ func TestQuitWithoutSyncQuitsImmediately(t *testing.T) {
 		}
 	}
 	t.Fatal("q without sync must quit at once")
+}
+
+func TestMoveUpWorksWithDuplicateRanks(t *testing.T) {
+	m := newTestModel(t)
+	m = press(t, m, "enter") // track current dir -> steps
+	for _, txt := range []string{"A", "B", "C"} {
+		m = press(t, m, "a")
+		m = typeText(t, m, txt)
+		m = press(t, m, "enter")
+	}
+	// Force B and C onto the same rank, as two offline appends would.
+	if _, err := store.Update(func(s *store.Store) error {
+		p := s.Projects[m.curPath]
+		p.Steps[2].Rank = p.Steps[1].Rank
+		p.SortSteps()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshFromDisk()
+	m.stCursor = 2 // on C (ties sort by id; either way the last row)
+	m = press(t, m, "shift+up")
+	p := m.st.Projects[m.curPath]
+	if p.Steps[1].Text == p.Steps[2].Text || p.Steps[1].Rank == p.Steps[2].Rank {
+		t.Fatalf("move with duplicate ranks was a no-op: %+v", p.Steps)
+	}
+	if p.Steps[0].Text != "A" {
+		t.Fatalf("rebalance changed the order: %+v", p.Steps)
+	}
 }

@@ -131,3 +131,25 @@ import Testing
         #expect(req2.projects?.first?.path == "/mac/proj")
     }
 }
+
+@Suite struct MergeTieTests {
+    @Test func equalStampCleanLocalAdoptsServerWinner() {
+        var doc = StoreDocument.empty()
+        let t = TickTime.parse("2026-01-01T00:00:00.000Z")!
+        doc.projects = [Project(id: "p1", name: "proj", path: nil, group: nil, deleted: false, updated: t, dirty: false)]
+        doc.steps = [Step(id: "s1", projectId: "p1", text: "ours", done: false, important: false, rank: "V",
+                          created: t, doneAt: nil, deleted: false, updated: t, dirty: false)]
+        let resp = WireSyncResponse(seq: 2, projects: nil, steps: [
+            WireStep(id: "s1", projectId: "p1", text: "theirs", done: nil, important: nil, rank: "V",
+                     created: "2026-01-01T00:00:00.000Z", doneAt: nil, deleted: nil,
+                     updated: "2026-01-01T00:00:00.000Z", seq: 2)])
+        let (out, pulled) = Merge.apply(response: resp, request: WireSyncRequest(device: "d", since: 0, projects: nil, steps: nil), to: doc)
+        #expect(pulled == 1)
+        #expect(out.steps[0].text == "theirs")
+
+        // An identical echo is a no-op.
+        let (again, pulled2) = Merge.apply(response: resp, request: WireSyncRequest(device: "d", since: 0, projects: nil, steps: nil), to: out)
+        #expect(pulled2 == 0)
+        #expect(again.steps == out.steps)
+    }
+}

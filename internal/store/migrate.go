@@ -59,9 +59,6 @@ func migrateV1(data []byte) (*Store, error) {
 			ID: NewID(), Path: key, Name: op.Name, Group: op.Group,
 			Steps: make([]Step, 0, len(op.Steps)), Updated: up.Truncate(time.Millisecond),
 		}
-		if p.Name == "" {
-			p.Name = op.Name
-		}
 		n := len(op.Steps)
 		for i, ost := range op.Steps {
 			u := ost.Created

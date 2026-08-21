@@ -3,11 +3,13 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/simontheguitarist/tick/internal/protocol"
 	"github.com/simontheguitarist/tick/internal/rank"
 	"github.com/simontheguitarist/tick/internal/store"
 )
@@ -187,6 +189,10 @@ func (m model) handleStepsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m = m.toggleImportant(idxs)
 		return m, m.scheduleSyncCmd()
 	case "y": // copy the project's path so you can cd to it elsewhere
+		if p := m.st.Projects[m.projKey]; p == nil || p.Path == "" {
+			m.status = "no local path — not linked to a directory yet"
+			return m, nil
+		}
 		m.status = "copied path"
 		return m, tea.SetClipboard(m.projKey)
 	case "h":
@@ -197,8 +203,9 @@ func (m model) handleStepsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "e":
 		if full, ok := m.selectedFull(idxs); ok {
-			m.editTarget = full
-			txt := []rune(m.st.Projects[m.projKey].Steps[full].Text)
+			st := m.st.Projects[m.projKey].Steps[full]
+			m.editTarget = st.ID
+			txt := []rune(st.Text)
 			m.input = &textInput{prompt: editPrompt, value: txt, pos: len(txt)}
 		}
 		return m, nil
@@ -254,33 +261,31 @@ func (m model) moveSelected(idxs []int, up bool) model {
 		if p == nil {
 			return nil
 		}
-		mi, ni := p.StepIndex(movedID), p.StepIndex(neighborID)
-		if mi < 0 || ni < 0 {
+		p.Rebalance() // duplicate ranks leave no gap to move into
+		mi := p.StepIndex(movedID)
+		if mi < 0 {
 			return nil
 		}
-		if up { // land immediately before the neighbor
-			lo := ""
-			if prev := ni - 1; prev >= 0 && p.Steps[prev].ID == movedID {
-				prev-- // the moved step itself must not bound the gap
-				if prev >= 0 {
-					lo = p.Steps[prev].Rank
-				}
-			} else if prev >= 0 {
-				lo = p.Steps[prev].Rank
-			}
-			p.Steps[mi].Rank = rank.Mid(lo, p.Steps[ni].Rank)
-		} else { // land immediately after the neighbor
-			hi := ""
-			if next := ni + 1; next < len(p.Steps) && p.Steps[next].ID == movedID {
-				next++
-				if next < len(p.Steps) {
-					hi = p.Steps[next].Rank
-				}
-			} else if next < len(p.Steps) {
-				hi = p.Steps[next].Rank
-			}
-			p.Steps[mi].Rank = rank.Mid(p.Steps[ni].Rank, hi)
+		// Same algorithm as the app's Store.move: take the moved step out,
+		// find the landing slot next to the neighbor, rank between the two
+		// steps that will surround it there.
+		rest := slices.Clone(p.Steps)
+		rest = slices.DeleteFunc(rest, func(st store.Step) bool { return st.ID == movedID })
+		dest := slices.IndexFunc(rest, func(st store.Step) bool { return st.ID == neighborID })
+		if dest < 0 {
+			return nil
 		}
+		if !up {
+			dest++
+		}
+		lo, hi := "", ""
+		if dest > 0 {
+			lo = rest[dest-1].Rank
+		}
+		if dest < len(rest) {
+			hi = rest[dest].Rank
+		}
+		p.Steps[mi].Rank = rank.Mid(lo, hi)
 		store.Touch(&p.Steps[mi])
 		p.SortSteps()
 		p.Rebalance()
@@ -311,6 +316,7 @@ func (m model) moveToTop(idxs []int) model {
 		if p == nil {
 			return nil
 		}
+		p.Rebalance()
 		mi := p.StepIndex(movedID)
 		if mi <= 0 {
 			return nil
@@ -442,19 +448,14 @@ func (m model) commitAdd(text string) model {
 	return m
 }
 
-func (m model) commitEdit(full int, text string) model {
-	p0 := m.st.Projects[m.projKey]
-	if p0 == nil || full < 0 || full >= len(p0.Steps) {
-		return m
-	}
-	id := p0.Steps[full].ID
+func (m model) commitEdit(id, text string) model {
 	s, err := store.Update(func(s *store.Store) error {
 		pp := s.Projects[m.projKey]
 		if pp == nil {
 			return nil
 		}
 		if i := pp.StepIndex(id); i >= 0 {
-			pp.Steps[i].Text = text
+			pp.Steps[i].Text = protocol.Clamp(text, protocol.MaxText)
 			store.Touch(&pp.Steps[i])
 		}
 		return nil
@@ -572,10 +573,17 @@ func (m model) reopenSelected(idxs []int) model {
 	return m
 }
 
-// refreshFromDisk reloads the store so the overview reflects any external edits.
+// refreshFromDisk reloads the store so the overview reflects any external
+// edits. The open project is re-found by id: linking it (here or on a pull)
+// re-keys it from id to path.
 func (m *model) refreshFromDisk() {
 	if s, err := store.Load(); err == nil {
 		m.st = s
+		if m.projID != "" && m.st.Projects[m.projKey] == nil {
+			if p := m.st.ByID(m.projID); p != nil {
+				m.projKey = store.Key(p)
+			}
+		}
 	}
 }
 

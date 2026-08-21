@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/simontheguitarist/tick/internal/atomicfile"
 	"github.com/simontheguitarist/tick/internal/protocol"
 )
 
@@ -96,15 +97,27 @@ func (s *Store) Apply(req protocol.SyncRequest) (protocol.SyncResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	touchedP := make([]string, 0, len(req.Projects))
-	touchedS := make([]string, 0, len(req.Steps))
+	// Everything the client pushed comes back in its current server version,
+	// accepted or not — a rejected push must still show the device the winner.
+	touchedP := map[string]bool{}
+	touchedS := map[string]bool{}
 	changed := false
 
+	// Every accepted write is recorded so a failed save can be rolled back:
+	// memory must never be ahead of disk, or the client's retry gets
+	// answered "already have it" for data that was never persisted.
+	prevSeq := s.doc.Seq
+	prevP := map[string]*storedProject{}
+	prevS := map[string]*storedStep{}
+
 	for _, in := range req.Projects {
-		touchedP = append(touchedP, in.ID)
+		touchedP[in.ID] = true
 		ex := s.doc.Projects[in.ID]
 		if ex != nil && !wins(in.Updated, req.Device, ex.Updated, ex.Device) {
 			continue
+		}
+		if _, seen := prevP[in.ID]; !seen {
+			prevP[in.ID] = ex
 		}
 		s.doc.Seq++
 		in.Seq = s.doc.Seq
@@ -112,10 +125,13 @@ func (s *Store) Apply(req protocol.SyncRequest) (protocol.SyncResponse, error) {
 		changed = true
 	}
 	for _, in := range req.Steps {
-		touchedS = append(touchedS, in.ID)
+		touchedS[in.ID] = true
 		ex := s.doc.Steps[in.ID]
 		if ex != nil && !wins(in.Updated, req.Device, ex.Updated, ex.Device) {
 			continue
+		}
+		if _, seen := prevS[in.ID]; !seen {
+			prevS[in.ID] = ex
 		}
 		s.doc.Seq++
 		in.Seq = s.doc.Seq
@@ -125,35 +141,34 @@ func (s *Store) Apply(req protocol.SyncRequest) (protocol.SyncResponse, error) {
 
 	if changed {
 		if err := s.save(); err != nil {
+			for id, old := range prevP {
+				if old == nil {
+					delete(s.doc.Projects, id)
+				} else {
+					s.doc.Projects[id] = old
+				}
+			}
+			for id, old := range prevS {
+				if old == nil {
+					delete(s.doc.Steps, id)
+				} else {
+					s.doc.Steps[id] = old
+				}
+			}
+			s.doc.Seq = prevSeq
 			return protocol.SyncResponse{}, err
 		}
 	}
 
 	resp := protocol.SyncResponse{Seq: s.doc.Seq}
-	seenP := map[string]bool{}
 	for _, p := range s.doc.Projects {
-		if p.Seq > req.Since {
+		if p.Seq > req.Since || touchedP[p.ID] {
 			resp.Projects = append(resp.Projects, p.Project)
-			seenP[p.ID] = true
 		}
 	}
-	for _, id := range touchedP { // rejected pushes: return the winner regardless of cursor
-		if p := s.doc.Projects[id]; p != nil && !seenP[id] {
-			resp.Projects = append(resp.Projects, p.Project)
-			seenP[id] = true
-		}
-	}
-	seenS := map[string]bool{}
 	for _, st := range s.doc.Steps {
-		if st.Seq > req.Since {
+		if st.Seq > req.Since || touchedS[st.ID] {
 			resp.Steps = append(resp.Steps, st.Step)
-			seenS[st.ID] = true
-		}
-	}
-	for _, id := range touchedS {
-		if st := s.doc.Steps[id]; st != nil && !seenS[id] {
-			resp.Steps = append(resp.Steps, st.Step)
-			seenS[id] = true
 		}
 	}
 	sort.Slice(resp.Projects, func(i, j int) bool { return resp.Projects[i].Seq < resp.Projects[j].Seq })
@@ -171,29 +186,10 @@ func wins(inUpdated, inDevice, exUpdated, exDevice string) bool {
 	return inDevice > exDevice
 }
 
-// save writes the document atomically (temp file, fsync, rename) — the same
-// crash-safety dance as the CLI's store.
 func (s *Store) save() error {
 	data, err := json.MarshalIndent(&s.doc, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(s.dir, "tick-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, s.path())
+	return atomicfile.WriteFile(s.path(), data, 0o600)
 }

@@ -22,7 +22,7 @@ final class AppModel {
     init() {
         let settings = self.settings
         engine = SyncEngine(store: store) {
-            guard let url = settings.baseURL, let token = settings.keychain.readToken() else { return nil }
+            guard let url = settings.baseURL, let token = settings.token else { return nil }
             return SyncClient(baseURL: url, token: token)
         }
     }

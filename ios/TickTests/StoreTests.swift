@@ -14,7 +14,7 @@ import Testing
         doc.projects = [Project.new(name: "proj")]
         doc.steps = [Step.new(text: "hello", projectId: doc.projects[0].id, rank: "V")]
         try file.write(doc)
-        let loaded = try #require(file.read())
+        let loaded = try #require(try file.read())
         #expect(loaded == doc)
 
         // The document stores canonical fixed-width UTC-ms strings.
@@ -24,8 +24,14 @@ import Testing
         #expect(stamp.count == 24 && stamp.hasSuffix("Z"), "not canonical: \(stamp)")
     }
 
-    @Test func missingFileMeansNil() {
-        #expect(tempFile().read() == nil)
+    @Test func missingFileMeansNil() throws {
+        #expect(try tempFile().read() == nil)
+    }
+
+    @Test func corruptFileThrowsInsteadOfVanishing() throws {
+        let file = tempFile()
+        try Data("{not json".utf8).write(to: file.url)
+        #expect(throws: (any Error).self) { try file.read() }
     }
 
     @Test func bumpIsMonotonic() {
@@ -101,5 +107,62 @@ import Testing
         let sections = store.doc.sections
         #expect(sections.map(\.group) == ["fun", "work", nil])
         #expect(sections.last?.projects.map(\.name) == ["zeta"])
+    }
+}
+
+@MainActor
+@Suite struct StoreUndoTests {
+    func freshStore() -> Store {
+        Store(file: StoreFile(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("tick-undo-\(UUID().uuidString).json")))
+    }
+
+    @Test func undoOutranksTombstoneEvenWithLaggingClock() {
+        let store = freshStore()
+        let p = store.addProject(name: "proj", group: nil)
+        store.addStep("x", to: p.id)
+        // Pretend the step came from a device whose clock is 5s ahead.
+        var doc = store.doc
+        doc.steps[0].updated = TickTime.now().addingTimeInterval(5)
+        store.applyMerged(doc, pulled: 1)
+        let step = store.doc.steps[0]
+        let deleted = store.deleteStep(step.id)!
+        let tombstone = store.doc.steps[0].updated
+        #expect(deleted.updated == tombstone)
+        store.undoDelete(deleted)
+        #expect(store.doc.steps[0].updated > tombstone)
+        #expect(!store.doc.steps[0].deleted)
+    }
+
+    @Test func undoKeepsNewerLiveCopy() {
+        let store = freshStore()
+        let p = store.addProject(name: "proj", group: nil)
+        store.addStep("original", to: p.id)
+        let step = store.doc.steps[0]
+        let deleted = store.deleteStep(step.id)!
+        // A newer edit from elsewhere resurrected it.
+        var doc = store.doc
+        doc.steps[0].deleted = false
+        doc.steps[0].text = "edited elsewhere"
+        doc.steps[0].updated = deleted.updated.addingTimeInterval(60)
+        doc.steps[0].dirty = false
+        store.applyMerged(doc, pulled: 1)
+        store.undoDelete(deleted)
+        #expect(store.doc.steps.count == 1)
+        #expect(store.doc.steps[0].text == "edited elsewhere")
+    }
+
+    @Test func moveWithDuplicateRanksStillMoves() {
+        let store = freshStore()
+        let p = store.addProject(name: "proj", group: nil)
+        for t in ["a", "b", "c"] { store.addStep(t, to: p.id) }
+        var doc = store.doc
+        doc.steps[2].rank = doc.steps[1].rank
+        store.applyMerged(doc, pulled: 1)
+        let visible = store.doc.steps(of: p.id, includeDone: true)
+        store.move(in: p.id, visible: visible, from: IndexSet(integer: 2), to: 0)
+        let after = store.doc.steps(of: p.id, includeDone: true)
+        #expect(after[0].id == visible[2].id)
+        #expect(Set(after.map(\.rank)).count == 3)
     }
 }

@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/simontheguitarist/tick/internal/protocol"
 	"github.com/simontheguitarist/tick/internal/store"
 )
 
@@ -239,8 +240,11 @@ func (m model) openSelected(items []ovItem) model {
 		}
 		m.st = s
 		m.projKey = m.curPath
+		if p := s.Projects[m.curPath]; p != nil {
+			m.projID = p.ID
+		}
 	case ovProject:
-		m.projKey = store.Key(it.proj)
+		m.projKey, m.projID = store.Key(it.proj), it.proj.ID
 	default:
 		return m // header — not selectable
 	}
@@ -266,7 +270,7 @@ func (m model) untrackSelected(items []ovItem) model {
 func (m model) commitGroup(path, group string) model {
 	s, err := store.Update(func(s *store.Store) error {
 		if p := s.Projects[path]; p != nil {
-			p.Group = group
+			p.Group = protocol.Clamp(group, protocol.MaxGroup)
 			store.TouchProject(p)
 		}
 		return nil

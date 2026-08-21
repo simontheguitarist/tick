@@ -41,8 +41,11 @@ func BuildRequest(s *store.Store, device string, since int64) protocol.SyncReque
 //   - a pushed entity whose local `updated` is unchanged since the push is
 //     acked: dirty cleared / tombstone dropped (an edit that raced the push
 //     stays dirty for the next round);
-//   - a remote entity replaces the local one iff remote.updated is strictly
-//     newer; deletions replace by removing;
+//   - a remote entity replaces the local one iff remote.updated is newer —
+//     or equal while the local copy is clean, because the server breaks
+//     equal-stamp ties by device id and echoes the winner (a clean local
+//     copy with the same stamp but different content is the tie's loser);
+//     deletions replace by removing;
 //   - a remote insert is skipped when a *newer* local tombstone exists —
 //     otherwise the local deletion would resurrect;
 //   - a project's local Path is never overwritten; a remote path is adopted
@@ -101,7 +104,7 @@ func Apply(s *store.Store, req protocol.SyncRequest, resp protocol.SyncResponse)
 		}
 		rt = rt.In(time.Local)
 		if rp.Deleted {
-			if local != nil && rt.After(local.Updated) {
+			if local != nil && (rt.After(local.Updated) || (rt.Equal(local.Updated) && !local.Dirty)) {
 				delete(s.Projects, store.Key(local))
 				pulled++
 			}
@@ -119,7 +122,7 @@ func Apply(s *store.Store, req protocol.SyncRequest, resp protocol.SyncResponse)
 			}
 			s.Projects[store.Key(p)] = p
 			pulled++
-		case rt.After(local.Updated):
+		case rt.After(local.Updated) || (rt.Equal(local.Updated) && !local.Dirty && !sameProject(local, rp)):
 			local.Name, local.Group, local.Updated, local.Dirty = rp.Name, rp.Group, rt, false
 			if local.Path == "" && rp.Path != "" && dirExists(rp.Path) && s.Projects[rp.Path] == nil {
 				delete(s.Projects, store.Key(local))
@@ -143,7 +146,7 @@ func Apply(s *store.Store, req protocol.SyncRequest, resp protocol.SyncResponse)
 			if p == nil {
 				continue
 			}
-			if i := p.StepIndex(rs.ID); i >= 0 && rt.After(p.Steps[i].Updated) {
+			if i := p.StepIndex(rs.ID); i >= 0 && (rt.After(p.Steps[i].Updated) || (rt.Equal(p.Steps[i].Updated) && !p.Steps[i].Dirty)) {
 				p.Steps = append(p.Steps[:i], p.Steps[i+1:]...)
 				pulled++
 			}
@@ -157,7 +160,8 @@ func Apply(s *store.Store, req protocol.SyncRequest, resp protocol.SyncResponse)
 			continue
 		}
 		if i := p.StepIndex(rs.ID); i >= 0 {
-			if rt.After(p.Steps[i].Updated) {
+			cur := &p.Steps[i]
+			if rt.After(cur.Updated) || (rt.Equal(cur.Updated) && !cur.Dirty && !sameStep(cur, p.ID, rs)) {
 				p.Steps[i] = st
 				resort[p] = true
 				pulled++
@@ -231,4 +235,19 @@ func fromWireStep(rs protocol.Step, updated time.Time) (store.Step, bool) {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// sameStep / sameProject tell an echo of our own push (identical content)
+// from a tie the server resolved against us, without ever rewriting our own
+// records — that would only churn timestamp precision in store.json.
+func sameStep(local *store.Step, projectID string, rs protocol.Step) bool {
+	w := wireStep(local, projectID)
+	rs.Seq = 0
+	return w == rs
+}
+
+func sameProject(local *store.Project, rp protocol.Project) bool {
+	w := wireProject(local)
+	rp.Seq = 0
+	return w == rp
 }

@@ -17,8 +17,10 @@ enum Merge {
     /// Applies a response to the document:
     ///  1. ack — pushed entities whose local stamp is unchanged lose `dirty`
     ///     (an edit that raced the push stays queued);
-    ///  2. last-writer-wins — a strictly newer remote record replaces the
-    ///     local one wholesale; an absent local inserts unless it's a
+    ///  2. last-writer-wins — a newer remote record replaces the local one
+    ///     wholesale; so does an equal-stamp record when the local copy is
+    ///     clean and differs (the server broke the tie by device id and is
+    ///     echoing the winner); an absent local inserts unless it's a
     ///     tombstone we never knew;
     ///  3. purge — acked tombstones and steps of vanished projects drop out;
     ///  4. the cursor advances to resp.seq.
@@ -37,13 +39,16 @@ enum Merge {
         }
 
         // 2. LWW upserts — projects first so steps can find their project.
+        // Stamps compare as canonical strings (fixed-width UTC ms), the same
+        // way the server compares them; Date equality would be float luck.
         for rp in response.projects ?? [] {
             guard let rt = TickTime.parse(rp.updated) else { continue }
             let incoming = Project(id: rp.id, name: rp.name ?? "", path: rp.path,
                                    group: rp.group, deleted: rp.deleted ?? false,
                                    updated: rt, dirty: false)
             if let i = doc.projects.firstIndex(where: { $0.id == rp.id }) {
-                if rt > doc.projects[i].updated {
+                let local = doc.projects[i]
+                if remoteWins(rp.updated, over: local.updated, localDirty: local.dirty, same: incoming == local) {
                     doc.projects[i] = incoming
                     pulled += 1
                 }
@@ -57,16 +62,18 @@ enum Merge {
             guard let rt = TickTime.parse(rs.updated) else { continue }
             let deleted = rs.deleted ?? false
             if let i = doc.steps.firstIndex(where: { $0.id == rs.id }) {
-                if rt > doc.steps[i].updated {
-                    if deleted {
-                        doc.steps[i].deleted = true
-                        doc.steps[i].updated = rt
-                        doc.steps[i].dirty = false
-                    } else if let st = localStep(rs, rt) {
-                        doc.steps[i] = st
-                    }
-                    pulled += 1
+                let local = doc.steps[i]
+                let converted = deleted ? nil : localStep(rs, rt)
+                let same = !deleted && converted == local
+                guard remoteWins(rs.updated, over: local.updated, localDirty: local.dirty, same: same) else { continue }
+                if deleted {
+                    doc.steps[i].deleted = true
+                    doc.steps[i].updated = rt
+                    doc.steps[i].dirty = false
+                } else if let st = converted {
+                    doc.steps[i] = st
                 }
+                pulled += 1
             } else if !deleted, knownProjects.contains(rs.projectId), let st = localStep(rs, rt) {
                 doc.steps.append(st)
                 pulled += 1
@@ -81,6 +88,15 @@ enum Merge {
         // 4. Cursor.
         doc.since = response.seq
         return (doc, pulled)
+    }
+
+    /// The LWW rule for one entity: newer wins; equal wins only over a clean
+    /// local copy that actually differs (a tie the server resolved against
+    /// us — an identical echo of our own push changes nothing).
+    private static func remoteWins(_ remote: String, over local: Date, localDirty: Bool, same: Bool) -> Bool {
+        let l = TickTime.format(local)
+        if remote > l { return true }
+        return remote == l && !localDirty && !same
     }
 
     // MARK: converters

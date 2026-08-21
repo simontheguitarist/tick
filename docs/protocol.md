@@ -45,8 +45,11 @@ Client, per received entity, applied under the store lock:
 1. **Ack**: a pushed entity whose local `updated` is unchanged since the push
    loses its dirty flag / its tombstone is dropped. An edit that raced the
    push stays dirty for the next round.
-2. **Replace**: a strictly-newer remote record replaces the local one whole
-   (deletion = removal). Equal or older → keep local.
+2. **Replace**: a newer remote record replaces the local one whole (deletion
+   = removal). An *equal* stamp replaces too when the local copy is clean and
+   the content differs — that is the server's device-id tie-break echoing the
+   winner to the loser (a clean equal-stamp identical echo is a no-op). Older
+   → keep local.
 3. **Insert guard**: a remote live copy older than a pending local tombstone
    is skipped — local deletions don't resurrect.
 4. **Path guard** (CLI only): a project's local path is never overwritten;

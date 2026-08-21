@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/simontheguitarist/tick/internal/atomicfile"
 	"github.com/simontheguitarist/tick/internal/store"
 )
 
@@ -57,11 +58,7 @@ func (c *Config) Save(d store.Dir) error {
 	if err != nil {
 		return err
 	}
-	tmp := configPath(d) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, configPath(d))
+	return atomicfile.WriteFile(configPath(d), data, 0o600)
 }
 
 // Off removes the config; local data stays untouched.
