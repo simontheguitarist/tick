@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 // keyFromString builds a KeyPressMsg whose String() matches the handlers.

@@ -1,9 +1,8 @@
-# Compiled binary (built with `go install` / `go build`)
 /tick
-
-# Go test/coverage artifacts
+/bin/
 *.test
 *.out
-
-# OS / editor cruft
 .DS_Store
+ios/*.xcodeproj
+ios/build/
+ios/DerivedData/

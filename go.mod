@@ -1,4 +1,4 @@
-module tick
+module github.com/simontheguitarist/tick
 
 go 1.26.1
 

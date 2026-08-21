@@ -9,7 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 // displayRow is one rendered step line.

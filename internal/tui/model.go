@@ -11,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 type mode int

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 // CurrentProject resolves the project for the working directory.

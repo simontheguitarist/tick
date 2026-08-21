@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"tick/internal/cli"
-	"tick/internal/tui"
+	"github.com/simontheguitarist/tick/internal/cli"
+	"github.com/simontheguitarist/tick/internal/tui"
 )
 
 var version = "0.1.0"

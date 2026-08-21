@@ -8,7 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 // ovKind distinguishes the three row types in the overview.

@@ -17,9 +17,9 @@ Steps live in a single global store (`~/.config/tick/store.json`, honoring
 ## Install
 
 ```sh
-go install .        # builds `tick` into $GOBIN / $GOPATH/bin
+go install ./cmd/tick   # builds `tick` into $GOBIN / $GOPATH/bin
 # or:
-go build -o tick . && mv tick ~/bin/   # ensure ~/bin is on PATH
+go build -o tick ./cmd/tick && mv tick ~/bin/   # ensure ~/bin is on PATH
 ```
 
 Requires Go 1.26+.
