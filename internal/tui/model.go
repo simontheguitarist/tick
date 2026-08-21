@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/store"
+	tsync "github.com/simontheguitarist/tick/internal/sync"
 )
 
 type mode int
@@ -50,11 +52,11 @@ var (
 	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a864fd"))
 )
 
-// undoEntry records a deleted step so it can be restored at its original spot.
+// undoEntry records a deleted step so it can be restored at its original spot
+// (the step carries its own id and rank, so position needs no bookkeeping).
 type undoEntry struct {
-	projPath string
+	projKey  string
 	projName string
-	index    int // original position in the project's full Steps slice
 	step     store.Step
 }
 
@@ -180,12 +182,13 @@ type model struct {
 
 	ovCursor int // overview selection
 
-	projPath string // selected project on the steps screen
+	projKey  string // selected project's store key (its path, or its id when unlinked)
+	projID   string // the same project's id — survives a re-key when it gets linked
 	stCursor int    // steps selection
 	showDone bool
 
 	input        *textInput    // non-nil while adding/editing/grouping
-	editTarget   int           // full step index being edited (when input is an edit)
+	editTarget   string        // id of the step being edited (when input is an edit); an id, not an index, so a background pull can't retarget the edit
 	assignTarget string        // project path being assigned a group (when input is a group prompt)
 	confirm      *confirmState // non-nil while confirming an untrack
 	conf         *system       // confetti
@@ -194,7 +197,68 @@ type model struct {
 	undo   []undoEntry // stack of reversible deletions (most recent last)
 	status string      // transient one-line message (e.g. "deleted X — u to undo")
 
+	// Async sync state. Sync runs as tea.Cmds so the UI never blocks on the
+	// network; the store lock is only held for the merge.
+	syncEnabled bool
+	syncing     bool   // a sync cmd is in flight
+	syncPending bool   // a debounce fired mid-flight; run once more after
+	syncSeq     int    // invalidates stale debounce timers
+	syncInfo    string // persistent footer note ("synced 15:04" / offline)
+	quitting    bool   // waiting for the final flush before tea.Quit
+	refreshWait bool   // a pull landed during the confetti; refresh after
+
 	err error
+}
+
+// Messages for the async sync loop.
+type (
+	syncDebounceMsg struct{ seq int }
+	syncPeriodicMsg struct{}
+	syncDoneMsg     struct {
+		res tsync.Result
+		ran bool
+		err error
+	}
+)
+
+const (
+	syncDebounce = 400 * time.Millisecond
+	syncPeriod   = 30 * time.Second
+	syncBudget   = 5 * time.Second
+	quitBudget   = 2 * time.Second
+)
+
+func runSyncCmd(timeout time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		res, ran, err := tsync.RunOnce(timeout)
+		return syncDoneMsg{res: res, ran: ran, err: err}
+	}
+}
+
+func periodicSyncCmd() tea.Cmd {
+	return tea.Tick(syncPeriod, func(time.Time) tea.Msg { return syncPeriodicMsg{} })
+}
+
+// scheduleSyncCmd arms the post-mutation debounce: rapid edits collapse into
+// one sync 400ms after the last.
+func (m *model) scheduleSyncCmd() tea.Cmd {
+	if !m.syncEnabled {
+		return nil
+	}
+	m.syncSeq++
+	seq := m.syncSeq
+	return tea.Tick(syncDebounce, func(time.Time) tea.Msg { return syncDebounceMsg{seq: seq} })
+}
+
+// maybeQuit flushes pending changes (bounded) before leaving, so crossing
+// something off and immediately quitting still reaches the phone.
+func (m model) maybeQuit() (tea.Model, tea.Cmd) {
+	if !m.syncEnabled || m.quitting {
+		return m, tea.Quit
+	}
+	m.quitting = true
+	m.syncInfo = "syncing…"
+	return m, runSyncCmd(quitBudget)
 }
 
 const (
@@ -213,13 +277,22 @@ func newModel() (model, error) {
 		cwd = "."
 	}
 	root := store.ProjectRoot(cwd)
+	syncEnabled := false
+	if os.Getenv("TICK_NO_SYNC") != "1" {
+		if d, err := store.DefaultDir(); err == nil {
+			if cfg, err := tsync.LoadConfig(d); err == nil && cfg != nil {
+				syncEnabled = true
+			}
+		}
+	}
 	return model{
-		st:      st,
-		width:   80,
-		height:  24,
-		curPath: root,
-		curName: filepath.Base(root),
-		conf:    &system{w: 80, h: 24},
+		st:          st,
+		width:       80,
+		height:      24,
+		curPath:     root,
+		curName:     filepath.Base(root),
+		conf:        &system{w: 80, h: 24},
+		syncEnabled: syncEnabled,
 	}, nil
 }
 
@@ -230,9 +303,9 @@ func RunAuto() error {
 	if err != nil {
 		return err
 	}
-	if _, ok := m.st.Projects[m.curPath]; ok {
+	if p, ok := m.st.Projects[m.curPath]; ok {
 		m.mode = modeSteps
-		m.projPath = m.curPath
+		m.projKey, m.projID = m.curPath, p.ID
 	} else {
 		m.mode = modeOverview
 		m = m.clampOvCursor()
@@ -256,7 +329,12 @@ func run(m model) error {
 	return err
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd {
+	if !m.syncEnabled {
+		return nil
+	}
+	return tea.Batch(runSyncCmd(syncBudget), periodicSyncCmd())
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -272,7 +350,57 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Burst finished: drop the snapshot so the live (post-removal) list shows.
 		m.anim = nil
+		if m.refreshWait { // a sync pull landed mid-burst
+			m.refreshWait = false
+			m.refreshFromDisk()
+		}
 		m = m.clampStepCursor()
+		return m, nil
+
+	case syncPeriodicMsg:
+		cmds := []tea.Cmd{periodicSyncCmd()}
+		if m.syncEnabled && !m.syncing && !m.quitting {
+			m.syncing = true
+			cmds = append(cmds, runSyncCmd(syncBudget))
+		}
+		return m, tea.Batch(cmds...)
+
+	case syncDebounceMsg:
+		if msg.seq != m.syncSeq || !m.syncEnabled {
+			return m, nil
+		}
+		if m.syncing {
+			m.syncPending = true
+			return m, nil
+		}
+		m.syncing = true
+		return m, runSyncCmd(syncBudget)
+
+	case syncDoneMsg:
+		m.syncing = false
+		if msg.ran {
+			if msg.err != nil {
+				m.syncInfo = "offline — changes queued"
+			} else {
+				m.syncInfo = "synced " + time.Now().Format("15:04")
+				if msg.res.Pulled > 0 {
+					if m.anim != nil {
+						m.refreshWait = true // don't yank rows mid-confetti
+					} else {
+						m.refreshFromDisk()
+						m = m.clampStepCursor().clampOvCursor()
+					}
+				}
+			}
+		}
+		if m.quitting {
+			return m, tea.Quit
+		}
+		if m.syncPending {
+			m.syncPending = false
+			m.syncing = true
+			return m, runSyncCmd(syncBudget)
+		}
 		return m, nil
 
 	case tea.PasteMsg:
@@ -428,7 +556,7 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		val := strings.TrimSpace(m.input.string())
 		prompt := m.input.prompt
-		idx := m.editTarget
+		editID := m.editTarget
 		path := m.assignTarget
 		m.input = nil
 		m.assignTarget = ""
@@ -437,14 +565,17 @@ func (m model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if val == "" {
 				return m, nil
 			}
-			return m.commitAdd(val), nil
+			m = m.commitAdd(val)
+			return m, m.scheduleSyncCmd()
 		case editPrompt:
 			if val == "" {
 				return m, nil
 			}
-			return m.commitEdit(idx, val), nil
+			m = m.commitEdit(editID, val)
+			return m, m.scheduleSyncCmd()
 		case groupPrompt:
-			return m.commitGroup(path, val), nil // blank clears the group
+			m = m.commitGroup(path, val) // blank clears the group
+			return m, m.scheduleSyncCmd()
 		}
 		return m, nil
 	case "esc":
@@ -496,14 +627,16 @@ func (m model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		path := m.confirm.untrackPath
 		m.confirm = nil
 		if s, err := store.Update(func(s *store.Store) error {
-			delete(s.Projects, path)
+			if p := s.Projects[path]; p != nil {
+				s.Untrack(p)
+			}
 			return nil
 		}); err != nil {
 			m.err = err
 		} else {
 			m.st = s
 		}
-		return m.clampOvCursor(), nil
+		return m.clampOvCursor(), m.scheduleSyncCmd()
 	default: // n, esc, enter, anything else -> cancel
 		m.confirm = nil
 		return m, nil

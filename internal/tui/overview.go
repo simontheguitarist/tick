@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
-	"tick/internal/store"
+	"github.com/simontheguitarist/tick/internal/protocol"
+	"github.com/simontheguitarist/tick/internal/store"
 )
 
 // ovKind distinguishes the three row types in the overview.
@@ -145,6 +145,8 @@ func (m model) overviewView() string {
 		marker := ""
 		if p.Path == m.curPath {
 			marker = dimStyle.Render("  (here)")
+		} else if p.Path == "" {
+			marker = dimStyle.Render("  (not linked)")
 		}
 		name := fmt.Sprintf("%-24s", p.Name)
 		b.WriteString(cursor + name + "  " + countStyle.Render(fmt.Sprintf("%d open", p.OpenCount())) + marker + "\n")
@@ -164,6 +166,9 @@ func (m model) overviewView() string {
 	default:
 		b.WriteString("  " + helpStyle.Render("enter open · g group · y copy path · d untrack · q quit") + "\n")
 	}
+	if m.syncInfo != "" {
+		b.WriteString("  " + dimStyle.Render("⇅ "+m.syncInfo) + "\n")
+	}
 	if m.status != "" {
 		b.WriteString("  " + statusStyle.Render(m.status) + "\n")
 	}
@@ -180,7 +185,7 @@ func (m model) handleOverviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q", "esc":
-		return m, tea.Quit
+		return m.maybeQuit()
 	case "up", "k":
 		if i := m.firstSelectable(items, m.ovCursor-1, -1); i >= 0 {
 			m.ovCursor = i
@@ -192,16 +197,21 @@ func (m model) handleOverviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter", "l", "space":
-		return m.openSelected(items), nil
+		m = m.openSelected(items)
+		return m, m.scheduleSyncCmd()
 	case "g": // assign the selected project to a group
 		if p := m.selectedProject(items); p != nil {
-			m.assignTarget = p.Path
+			m.assignTarget = store.Key(p)
 			cur := []rune(p.Group)
 			m.input = &textInput{prompt: groupPrompt, value: cur, pos: len(cur)}
 		}
 		return m, nil
 	case "y": // copy the selected project's path
 		if p := m.selectedProject(items); p != nil {
+			if p.Path == "" {
+				m.status = "no local path — not linked to a directory yet"
+				return m, nil
+			}
 			m.status = "copied path"
 			return m, tea.SetClipboard(p.Path)
 		}
@@ -229,9 +239,12 @@ func (m model) openSelected(items []ovItem) model {
 			return m
 		}
 		m.st = s
-		m.projPath = m.curPath
+		m.projKey = m.curPath
+		if p := s.Projects[m.curPath]; p != nil {
+			m.projID = p.ID
+		}
 	case ovProject:
-		m.projPath = it.proj.Path
+		m.projKey, m.projID = store.Key(it.proj), it.proj.ID
 	default:
 		return m // header — not selectable
 	}
@@ -247,7 +260,7 @@ func (m model) untrackSelected(items []ovItem) model {
 	}
 	m.confirm = &confirmState{
 		prompt:      fmt.Sprintf("Untrack %q and delete its %d step(s)?  y / n", p.Name, len(p.Steps)),
-		untrackPath: p.Path,
+		untrackPath: store.Key(p),
 		untrackName: p.Name,
 	}
 	return m
@@ -257,8 +270,8 @@ func (m model) untrackSelected(items []ovItem) model {
 func (m model) commitGroup(path, group string) model {
 	s, err := store.Update(func(s *store.Store) error {
 		if p := s.Projects[path]; p != nil {
-			p.Group = group
-			p.Modified = time.Now()
+			p.Group = protocol.Clamp(group, protocol.MaxGroup)
+			store.TouchProject(p)
 		}
 		return nil
 	})

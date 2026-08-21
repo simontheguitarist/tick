@@ -1,0 +1,97 @@
+name: Tick
+options:
+  bundleIdPrefix: ch.simk
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: CDPMPRKM35
+    MARKETING_VERSION: 0.2.0
+    CURRENT_PROJECT_VERSION: 1
+
+targets:
+  Tick:
+    type: application
+    platform: iOS
+    sources:
+      - Tick
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.simk.tick
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Tick
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_NSCameraUsageDescription: Tick uses the camera only to scan the pairing QR code shown by the tick CLI.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Tick/Resources/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: ch.simk.tick
+            CFBundleURLSchemes: [tick]
+    entitlements:
+      path: Tick/Resources/Tick.entitlements
+      properties:
+        com.apple.security.application-groups: [group.ch.simk.tick]
+    dependencies:
+      - target: TickWidget
+        embed: true
+
+  TickWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TickWidget
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.simk.tick.widgets
+        SKIP_INSTALL: YES
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Tick
+        ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME: WidgetBackground
+    info:
+      path: TickWidget/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: TickWidget/TickWidget.entitlements
+      properties:
+        com.apple.security.application-groups: [group.ch.simk.tick]
+
+  TickTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - TickTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ch.simk.tick.Tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tick.app/Tick"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+    dependencies:
+      - target: Tick
+
+schemes:
+  Tick:
+    build:
+      targets:
+        Tick: all
+        TickTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [TickTests]
