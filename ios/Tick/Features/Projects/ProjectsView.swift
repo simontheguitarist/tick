@@ -226,9 +226,11 @@ struct ProjectFormSheet: View {
     }
 }
 
-/// One quiet mono line about sync — informative, never nagging.
-struct SyncStatusLine: View {
+/// The sync state as one short mono phrase — used bare in Settings and
+/// wrapped by `SyncStatusLine` as the projects-screen footer.
+struct SyncStatusText: View {
     @Environment(AppModel.self) private var app
+    var prefix = ""
 
     var body: some View {
         Group {
@@ -236,25 +238,36 @@ struct SyncStatusLine: View {
             case .syncing:
                 HStack(spacing: Theme.Space.tight) {
                     ProgressView().controlSize(.mini)
-                    Text("⇅ syncing…")
+                    Text(prefix + "syncing…")
                 }
+                .foregroundStyle(Theme.inkSecondary)
             case .offline:
-                Text("⇅ offline — saved on this phone")
+                Text(prefix + "offline — saved on this phone")
+                    .foregroundStyle(Theme.yellow)
             case .authFailed:
-                Text("⇅ token rejected — re-pair in settings")
+                Text(prefix + "token rejected — re-pair")
                     .foregroundStyle(Theme.pink)
             case .idle:
                 if let t = app.engine.lastSynced {
-                    Text("⇅ synced \(t.formatted(.relative(presentation: .named)))")
+                    Text(prefix + "synced \(t.formatted(.relative(presentation: .named)))")
+                        .foregroundStyle(Theme.inkDim)
                 } else {
-                    Text(" ")
+                    Text(prefix + "not synced yet")
+                        .foregroundStyle(Theme.inkDim)
                 }
             }
         }
         .font(.statusLine)
-        .foregroundStyle(Theme.inkDim)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, Theme.Space.hair)
-        .background(Theme.bg.opacity(0.9))
+    }
+}
+
+/// One quiet mono line about sync at the foot of the projects screen —
+/// informative, never nagging.
+struct SyncStatusLine: View {
+    var body: some View {
+        SyncStatusText(prefix: "⇅ ")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Theme.Space.hair)
+            .background(Theme.bg.opacity(0.9))
     }
 }

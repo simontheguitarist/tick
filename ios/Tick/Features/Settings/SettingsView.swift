@@ -17,7 +17,7 @@ struct SettingsView: View {
                     LabeledContent("This device") {
                         Text(app.store.doc.device).font(.statusLine)
                     }
-                    LabeledContent("Status") { SyncStatusLine() }
+                    LabeledContent("Status") { SyncStatusText() }
                     if app.store.pendingPushCount > 0 {
                         LabeledContent("Queued", value: "\(app.store.pendingPushCount) change(s)")
                     }
