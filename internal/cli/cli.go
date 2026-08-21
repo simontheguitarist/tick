@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/simontheguitarist/tick/internal/store"
 )
@@ -112,12 +111,12 @@ func Done(projPath, projName string, nums []int) error {
 		for _, n := range nums {
 			st := &p.Steps[n-1]
 			if !st.Done {
-				now := time.Now()
+				now := store.Now()
 				st.Done, st.DoneAt = true, &now
+				store.Touch(st)
 			}
 			msgs = append(msgs, fmt.Sprintf("✓ %s", st.Text))
 		}
-		p.Modified = time.Now()
 		return nil
 	}); err != nil {
 		return err
@@ -140,9 +139,9 @@ func Undone(projPath, projName string, nums []int) error {
 		for _, n := range nums {
 			st := &p.Steps[n-1]
 			st.Done, st.DoneAt = false, nil
+			store.Touch(st)
 			msgs = append(msgs, fmt.Sprintf("○ %s", st.Text))
 		}
-		p.Modified = time.Now()
 		return nil
 	}); err != nil {
 		return err
@@ -165,9 +164,8 @@ func Remove(projPath, projName string, nums []int) error {
 		// Delete from the highest index down so earlier indices stay valid.
 		for _, n := range sortedDesc(nums) {
 			msgs = append(msgs, fmt.Sprintf("removed: %s", p.Steps[n-1].Text))
-			p.Steps = append(p.Steps[:n-1], p.Steps[n:]...)
+			s.RemoveStep(p, n-1)
 		}
-		p.Modified = time.Now()
 		return nil
 	}); err != nil {
 		return err
@@ -191,7 +189,7 @@ func Edit(projPath, projName string, n int, text string) error {
 			return err
 		}
 		p.Steps[n-1].Text = text
-		p.Modified = time.Now()
+		store.Touch(&p.Steps[n-1])
 		return nil
 	}); err != nil {
 		return err
@@ -215,7 +213,11 @@ func Projects(currentPath string) error {
 		if p.Path == currentPath {
 			marker = "*" // the project you're standing in
 		}
-		fmt.Printf(" %s %-24s %2d open   %s\n", marker, p.Name, p.OpenCount(), p.Path)
+		loc := p.Path
+		if loc == "" {
+			loc = "(not linked — run `tick link " + p.Name + "` inside its directory)"
+		}
+		fmt.Printf(" %s %-24s %2d open   %s\n", marker, p.Name, p.OpenCount(), loc)
 	}
 	return nil
 }
@@ -237,7 +239,9 @@ func Untrack(projPath, projName string, assumeYes bool) error {
 		}
 	}
 	if _, err := store.Update(func(s *store.Store) error {
-		delete(s.Projects, projPath)
+		if p := s.Projects[projPath]; p != nil {
+			s.Untrack(p)
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -261,16 +265,12 @@ func Clear(projPath, projName string, allProjects bool) error {
 			targets = append(targets, p)
 		}
 		for _, p := range targets {
-			kept := p.Steps[:0]
-			for _, st := range p.Steps {
-				if st.Done {
+			for i := len(p.Steps) - 1; i >= 0; i-- {
+				if p.Steps[i].Done {
+					s.RemoveStep(p, i)
 					removed++
-					continue
 				}
-				kept = append(kept, st)
 			}
-			p.Steps = kept
-			p.Modified = time.Now()
 		}
 		return nil
 	}); err != nil {

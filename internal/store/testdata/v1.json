@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "projects": {
+    "/Users/skn/Documents/1_Projects/blitzsheet": {
+      "path": "/Users/skn/Documents/1_Projects/blitzsheet",
+      "name": "blitzsheet",
+      "steps": [
+        {
+          "text": "fix langfuse not recording (root) - also switch to main branch & pull",
+          "done": true,
+          "created": "2026-06-08T08:09:15.024281+02:00",
+          "done_at": "2026-06-10T12:53:29.391918+02:00"
+        },
+        {
+          "text": "next steps kurz durchplanen & mit Patric anschauen",
+          "done": true,
+          "important": true,
+          "created": "2026-06-10T08:32:57.120363+02:00",
+          "done_at": "2026-06-12T08:10:26.170567+02:00"
+        },
+        {
+          "text": "Roli Änderungen aufnehmen -> siehe Apple Notes",
+          "done": false,
+          "created": "2026-08-21T14:01:17.788233+02:00"
+        }
+      ],
+      "modified": "2026-08-21T14:06:40.55709+02:00"
+    },
+    "/Users/skn/Documents/1_Projects/IDPA Gokart": {
+      "path": "/Users/skn/Documents/1_Projects/IDPA Gokart",
+      "name": "IDPA Gokart",
+      "steps": [
+        {
+          "text": "Strassenerkennung verbessern und fixen",
+          "done": false,
+          "created": "2026-08-21T14:28:59.86659+02:00"
+        }
+      ],
+      "modified": "2026-08-21T14:29:39.393104+02:00"
+    },
+    "/Users/skn/tmp/fresh": {
+      "path": "/Users/skn/tmp/fresh",
+      "name": "fresh",
+      "steps": [],
+      "modified": "0001-01-01T00:00:00Z"
+    }
+  }
+}

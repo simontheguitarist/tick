@@ -102,8 +102,8 @@ func TestTrackCurrentDirSwitchesToSteps(t *testing.T) {
 	if m.mode != modeSteps {
 		t.Fatalf("expected to switch to steps mode, got %v", m.mode)
 	}
-	if m.projPath != m.curPath {
-		t.Fatalf("projPath %q != curPath %q", m.projPath, m.curPath)
+	if m.projKey != m.curPath {
+		t.Fatalf("projKey %q != curPath %q", m.projKey, m.curPath)
 	}
 	if _, ok := m.st.Projects[m.curPath]; !ok {
 		t.Fatal("current dir was not tracked in the store")

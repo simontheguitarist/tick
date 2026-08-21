@@ -50,11 +50,11 @@ var (
 	groupHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#a864fd"))
 )
 
-// undoEntry records a deleted step so it can be restored at its original spot.
+// undoEntry records a deleted step so it can be restored at its original spot
+// (the step carries its own id and rank, so position needs no bookkeeping).
 type undoEntry struct {
-	projPath string
+	projKey  string
 	projName string
-	index    int // original position in the project's full Steps slice
 	step     store.Step
 }
 
@@ -180,7 +180,7 @@ type model struct {
 
 	ovCursor int // overview selection
 
-	projPath string // selected project on the steps screen
+	projKey string // selected project's store key (its path, or its id when unlinked)
 	stCursor int    // steps selection
 	showDone bool
 
@@ -232,7 +232,7 @@ func RunAuto() error {
 	}
 	if _, ok := m.st.Projects[m.curPath]; ok {
 		m.mode = modeSteps
-		m.projPath = m.curPath
+		m.projKey = m.curPath
 	} else {
 		m.mode = modeOverview
 		m = m.clampOvCursor()
@@ -496,7 +496,9 @@ func (m model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		path := m.confirm.untrackPath
 		m.confirm = nil
 		if s, err := store.Update(func(s *store.Store) error {
-			delete(s.Projects, path)
+			if p := s.Projects[path]; p != nil {
+				s.Untrack(p)
+			}
 			return nil
 		}); err != nil {
 			m.err = err
