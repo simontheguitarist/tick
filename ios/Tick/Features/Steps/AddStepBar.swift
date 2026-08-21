@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The bottom prompt for adding steps — the TUI's `add:` line, phone-sized.
-/// Stays out of the way, keeps the keyboard up for rapid entry.
+/// Keeps the keyboard up for rapid entry; the trailing slot is the way out:
+/// a dismiss chevron while the field is empty, the return arrow once you type.
 struct AddStepBar: View {
     let add: (String) -> Void
     @State private var text = ""
@@ -25,6 +26,15 @@ struct AddStepBar: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(Theme.cyan)
                 }
+                .accessibilityLabel("Add step")
+                .transition(.scale.combined(with: .opacity))
+            } else if focused {
+                Button { focused = false } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.inkSecondary)
+                }
+                .accessibilityLabel("Hide keyboard")
                 .transition(.scale.combined(with: .opacity))
             }
         }
@@ -35,6 +45,7 @@ struct AddStepBar: View {
         .padding(.horizontal, Theme.Space.base)
         .padding(.bottom, Theme.Space.tight)
         .animation(.snappy(duration: Theme.Motion.quick), value: text.isEmpty)
+        .animation(.snappy(duration: Theme.Motion.quick), value: focused)
     }
 
     private func submit() {
