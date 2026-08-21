@@ -4,12 +4,14 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/simontheguitarist/tick/internal/store"
 )
@@ -65,13 +67,39 @@ func Add(projPath, projName, text string) error {
 	return nil
 }
 
+// stepJSON is one row of `tick ls --json`. Num is the 1-based position the
+// human-facing commands (done/rm/edit) address.
+type stepJSON struct {
+	ID        string     `json:"id"`
+	Num       int        `json:"num"`
+	Text      string     `json:"text"`
+	Done      bool       `json:"done"`
+	Important bool       `json:"important,omitempty"`
+	Created   time.Time  `json:"created"`
+	DoneAt    *time.Time `json:"done_at,omitempty"`
+	Rank      string     `json:"rank"`
+}
+
 // List prints the project's steps. Done steps are hidden unless all is set.
-func List(projPath, projName string, all bool) error {
+func List(projPath, projName string, all, asJSON bool) error {
 	s, err := store.Load()
 	if err != nil {
 		return err
 	}
 	p := s.Projects[projPath]
+	if asJSON {
+		rows := []stepJSON{}
+		if p != nil {
+			for i, st := range p.Steps {
+				if st.Done && !all {
+					continue
+				}
+				rows = append(rows, stepJSON{ID: st.ID, Num: i + 1, Text: st.Text, Done: st.Done,
+					Important: st.Important, Created: st.Created, DoneAt: st.DoneAt, Rank: st.Rank})
+			}
+		}
+		return printJSON(rows)
+	}
 	if p == nil || len(p.Steps) == 0 {
 		fmt.Printf("%s — no steps yet. Add one:  tick add \"...\"\n", projName)
 		return nil
@@ -199,10 +227,24 @@ func Edit(projPath, projName string, n int, text string) error {
 }
 
 // Projects lists all tracked projects with their open-step counts.
-func Projects(currentPath string) error {
+func Projects(currentPath string, asJSON bool) error {
 	s, err := store.Load()
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		type projJSON struct {
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Path  string `json:"path,omitempty"`
+			Group string `json:"group,omitempty"`
+			Open  int    `json:"open"`
+		}
+		rows := []projJSON{}
+		for _, p := range s.SortedProjects() {
+			rows = append(rows, projJSON{ID: p.ID, Name: p.Name, Path: p.Path, Group: p.Group, Open: p.OpenCount()})
+		}
+		return printJSON(rows)
 	}
 	if len(s.Projects) == 0 {
 		fmt.Println("no projects tracked yet — run `tick add \"...\"` inside one")
@@ -278,6 +320,54 @@ func Clear(projPath, projName string, allProjects bool) error {
 	}
 	fmt.Printf("cleared %d done step(s)\n", removed)
 	return nil
+}
+
+// Link attaches an unlinked project (created on another device) to the
+// current directory. With no argument it matches by the directory's name.
+func Link(arg string) error {
+	_, root, name, err := ResolveProject(nil)
+	if err != nil {
+		return err
+	}
+	target := strings.TrimSpace(arg)
+	if target == "" {
+		target = name
+	}
+	var linked string
+	if _, err := store.Update(func(s *store.Store) error {
+		if s.Projects[root] != nil {
+			return fmt.Errorf("%s is already tracked here", name)
+		}
+		var match *store.Project
+		matches := 0
+		for _, p := range s.Projects {
+			if p.Path != "" {
+				continue
+			}
+			if p.Name == target || strings.HasPrefix(p.ID, target) {
+				match, matches = p, matches+1
+			}
+		}
+		switch {
+		case matches == 0:
+			return fmt.Errorf("no unlinked project matches %q — `tick projects` shows what's there", target)
+		case matches > 1:
+			return fmt.Errorf("%d unlinked projects match %q — use an id from `tick projects --json`", matches, target)
+		}
+		s.Link(match, root)
+		linked = match.Name
+		return nil
+	}); err != nil {
+		return err
+	}
+	fmt.Printf("linked %s to %s\n", linked, root)
+	return nil
+}
+
+func printJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 // --- helpers ---
