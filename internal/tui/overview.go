@@ -6,9 +6,18 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/simontheguitarist/tick/internal/protocol"
 	"github.com/simontheguitarist/tick/internal/store"
+)
+
+// Project-name column: at most ovNameCol cells, shrinking on narrow windows so
+// the count stays on the name's line. Below ovNameMin the marker is dropped to
+// buy the name back some room.
+const (
+	ovNameCol = 24
+	ovNameMin = 8
 )
 
 // ovKind distinguishes the three row types in the overview.
@@ -130,7 +139,8 @@ func (m model) overviewView() string {
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			b.WriteString(" " + groupHeaderStyle.Render(strings.ToUpper(it.label)) + "\n")
+			label := ansi.Truncate(strings.ToUpper(it.label), m.width-2, "…")
+			b.WriteString(" " + groupHeaderStyle.Render(label) + "\n")
 			continue
 		}
 		cursor := "  "
@@ -138,42 +148,59 @@ func (m model) overviewView() string {
 			cursor = cursorStyle.Render("> ")
 		}
 		if it.kind == ovTrackCurrent {
-			b.WriteString(cursor + trackStyle.Render("+ Track current dir: ") + trackStyle.Render(m.curName) + "\n")
+			label := ansi.Truncate("+ Track current dir: "+m.curName, m.width-cursorCol-1, "…")
+			b.WriteString(cursor + trackStyle.Render(label) + "\n")
 			continue
 		}
 		p := it.proj
 		marker := ""
 		if p.Path == m.curPath {
-			marker = dimStyle.Render("  (here)")
+			marker = "  (here)"
 		} else if p.Path == "" {
-			marker = dimStyle.Render("  (not linked)")
+			marker = "  (not linked)"
 		}
-		name := fmt.Sprintf("%-24s", p.Name)
-		b.WriteString(cursor + name + "  " + countStyle.Render(fmt.Sprintf("%d open", p.OpenCount())) + marker + "\n")
+		count := fmt.Sprintf("%d open", p.OpenCount())
+		// A row's tail has to stay on the name's line, so nothing here wraps: the
+		// name column gives way to the count, and the marker is the first thing
+		// dropped once that leaves the name too little room.
+		room := m.width - cursorCol - 2 - ansi.StringWidth(count) - 1
+		if room-ansi.StringWidth(marker) < ovNameMin {
+			marker = ""
+		}
+		nameW := room - ansi.StringWidth(marker)
+		if nameW > ovNameCol {
+			nameW = ovNameCol
+		}
+		if nameW < 1 {
+			nameW = 1
+		}
+		name := ansi.Truncate(p.Name, nameW, "…")
+		name += strings.Repeat(" ", nameW-ansi.StringWidth(name))
+		b.WriteString(cursor + name + "  " + countStyle.Render(count) + dimStyle.Render(marker) + "\n")
 	}
 
 	b.WriteString("\n")
 	switch {
 	case m.input != nil:
-		b.WriteString(m.input.view() + "\n")
+		b.WriteString(m.input.view(m.width) + "\n")
 		hint := "enter save · esc cancel"
 		if g := m.existingGroups(); len(g) > 0 {
 			hint += "  ·  existing: " + strings.Join(g, ", ") + " (blank clears)"
 		}
-		b.WriteString("  " + helpStyle.Render(hint) + "\n")
+		b.WriteString(m.indented(helpStyle, hint))
 	case m.confirm != nil:
-		b.WriteString("  " + errStyle.Render(m.confirm.prompt) + "\n")
+		b.WriteString(m.indented(errStyle, m.confirm.prompt))
 	default:
-		b.WriteString("  " + helpStyle.Render("enter open · g group · y copy path · d untrack · q quit") + "\n")
+		b.WriteString(m.indented(helpStyle, "enter open · g group · y copy path · d untrack · q quit"))
 	}
 	if m.syncInfo != "" {
-		b.WriteString("  " + dimStyle.Render("⇅ "+m.syncInfo) + "\n")
+		b.WriteString(m.indented(dimStyle, "⇅ "+m.syncInfo))
 	}
 	if m.status != "" {
-		b.WriteString("  " + statusStyle.Render(m.status) + "\n")
+		b.WriteString(m.indented(statusStyle, m.status))
 	}
 	if m.err != nil {
-		b.WriteString("  " + errStyle.Render(m.err.Error()) + "\n")
+		b.WriteString(m.indented(errStyle, m.err.Error()))
 	}
 	return b.String()
 }

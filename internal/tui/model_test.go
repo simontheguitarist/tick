@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -511,8 +512,54 @@ func TestTextInputWordJump(t *testing.T) {
 
 func TestTextInputViewShowsCursorMidString(t *testing.T) {
 	ti := &textInput{prompt: "add:", value: []rune("cat"), pos: 1}
-	if got := ansi.Strip(ti.view()); !strings.Contains(got, "add: cat") {
+	if got := ansi.Strip(ti.view(80)); !strings.Contains(got, "add: cat") {
 		t.Fatalf("view should render full text in order: %q", got)
+	}
+}
+
+func TestTextInputScrollsWhenTextOutgrowsWindow(t *testing.T) {
+	const width = 40
+	val := "rewrite the sync layer so the phone and the mac finally agree"
+	ti := &textInput{prompt: "add:", value: []rune(val), pos: len([]rune(val))}
+
+	got := ansi.Strip(ti.view(width))
+	if w := ansi.StringWidth(got); w > width {
+		t.Fatalf("input is %d cells wide in a %d-cell window: %q", w, width, got)
+	}
+	if !strings.HasSuffix(got, "agree▌") {
+		t.Fatalf("the window should follow the cursor to the end: %q", got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Fatalf("the clipped head should be marked: %q", got)
+	}
+
+	ti.home() // jumping back scrolls the window with it
+	got = ansi.Strip(ti.view(width))
+	if w := ansi.StringWidth(got); w > width {
+		t.Fatalf("input is %d cells wide after home: %q", w, got)
+	}
+	if !strings.HasPrefix(strings.TrimLeft(got, " "), "add: rewrite the") {
+		t.Fatalf("home should show the head of the value: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("the clipped tail should be marked: %q", got)
+	}
+}
+
+func TestTextInputWindowFollowsBackspace(t *testing.T) {
+	const width = 30
+	val := strings.Repeat("ab ", 20)
+	ti := &textInput{prompt: "add:", value: []rune(val), pos: len([]rune(val))}
+	ti.view(width) // scroll out to the end
+	if ti.off == 0 {
+		t.Fatal("the window should have scrolled off the start")
+	}
+	for i := 0; i < len([]rune(val)); i++ {
+		ti.backspace()
+		ti.view(width)
+	}
+	if ti.off != 0 {
+		t.Fatalf("the window should scroll back as the value shrinks, off=%d", ti.off)
 	}
 }
 
@@ -612,5 +659,107 @@ func TestMoveToTop(t *testing.T) {
 	m = press(t, m, "t") // already at top -> no-op
 	if got := stepTexts(m); !reflect.DeepEqual(got, []string{"c", "a", "b"}) {
 		t.Fatalf("move-to-top at top changed order: %v", got)
+	}
+}
+
+func TestStepRowWrapsWithHangingIndent(t *testing.T) {
+	const width = 40
+	r := displayRow{text: "rewrite the sync layer so the phone and the mac finally agree", num: 7}
+	lines := r.render("> ", width)
+	if len(lines) < 2 {
+		t.Fatalf("long text should wrap, got %d line(s): %q", len(lines), lines)
+	}
+	for _, ln := range lines {
+		if w := ansi.StringWidth(ln); w > width {
+			t.Fatalf("line is %d cells wide in a %d-cell window: %q", w, width, ansi.Strip(ln))
+		}
+	}
+	col := r.textCol()
+	for _, ln := range lines[1:] {
+		plain := ansi.Strip(ln)
+		if got := len(plain) - len(strings.TrimLeft(plain, " ")); got != col {
+			t.Fatalf("continuation should hang at column %d, got %d: %q", col, got, plain)
+		}
+	}
+	var parts []string
+	for _, ln := range lines {
+		parts = append(parts, strings.TrimSpace(ansi.Strip(ln)))
+	}
+	if got := strings.Join(parts, " "); !strings.HasSuffix(got, r.text) {
+		t.Fatalf("the wrap changed the text: %q", got)
+	}
+}
+
+// Nothing the views draw may spill past the window: the terminal would hard-wrap
+// it mid-word and the confetti row math would drift.
+func TestViewsFitNarrowWindows(t *testing.T) {
+	long := "rewrite the sync layer so the phone and the mac finally agree on ranks"
+	for _, width := range []int{24, 34, 40, 55, 56, 80} {
+		m := setupSteps(t, long, "short one")
+		m.status = "deleted " + strconv.Quote(long) + " — press u to undo"
+		m.syncInfo = "offline — changes queued"
+		m, _ = send(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
+
+		views := map[string]string{"steps": m.stepsView(), "overview": m.overviewView()}
+		mi := press(t, m, "a") // the add input, with a value longer than the window
+		mi = typeText(t, mi, long)
+		views["steps+input"] = mi.stepsView()
+		empty := press(t, newTestModel(t), "enter") // tracked project, no steps yet
+		empty, _ = send(t, empty, tea.WindowSizeMsg{Width: width, Height: 24})
+		views["steps+empty"] = empty.stepsView()
+
+		for name, v := range views {
+			for i, ln := range strings.Split(v, "\n") {
+				if w := ansi.StringWidth(ln); w > width {
+					t.Fatalf("%s at width %d: line %d is %d cells: %q", name, width, i, w, ansi.Strip(ln))
+				}
+			}
+		}
+	}
+}
+
+func TestOverviewRowKeepsCountOnTheNameLine(t *testing.T) {
+	m := setupSteps(t, "one")
+	m = press(t, m, "esc") // back to the overview
+	m, _ = send(t, m, tea.WindowSizeMsg{Width: 34, Height: 24})
+	view := ansi.Strip(m.overviewView())
+	var found bool
+	for _, ln := range strings.Split(view, "\n") {
+		if strings.Contains(ln, "1 open") {
+			found = true
+			if !strings.Contains(ln, "(here)") {
+				t.Fatalf("count and marker should share the name's line: %q", ln)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("overview should show the open count:\n%s", view)
+	}
+}
+
+// The burst is drawn at an absolute screen row, so a wrapped row above the
+// crossed-off one has to push it down.
+func TestConfettiRowFollowsWrappedRowsAbove(t *testing.T) {
+	long := "rewrite the sync layer so the phone and the mac finally agree on ranks"
+	m := setupSteps(t, long, "second")
+	m, _ = send(t, m, tea.WindowSizeMsg{Width: 40, Height: 24})
+	m = press(t, m, "down") // cursor on "second"
+
+	above := len(m.liveStepRows()[0].render("  ", m.width))
+	if above < 2 {
+		t.Fatalf("the first row should wrap at width 40, got %d line(s)", above)
+	}
+	want := m.stepsTopRows() + above
+
+	m, _ = send(t, m, keyFromString("x"))
+	if len(m.conf.particles) == 0 {
+		t.Fatal("crossing off should fire a burst")
+	}
+	if got := int(m.conf.particles[0].physics.Position().Y); got != want {
+		t.Fatalf("burst row %d, want %d", got, want)
+	}
+	lines := strings.Split(ansi.Strip(m.stepsView()), "\n")
+	if want >= len(lines) || !strings.Contains(lines[want], "second") {
+		t.Fatalf("row %d of the view is not the crossed step:\n%s", want, strings.Join(lines, "\n"))
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/simontheguitarist/tick/internal/store"
 	tsync "github.com/simontheguitarist/tick/internal/sync"
@@ -101,7 +102,7 @@ func (m model) bannerHeader(context, subtitle, right string) string {
 	const metaCol = bannerWidth + 3 // 1 left margin + banner + 2 gap
 	meta := map[int]string{}
 	if context != "" {
-		meta[1] = dimStyle.Render("› ") + projNameStyle.Render(context)
+		meta[1] = dimStyle.Render("› ") + projNameStyle.Render(ansi.Truncate(context, m.width-metaCol-3, "…"))
 		meta[2] = pathStyle.Render(truncTail(subtitle, m.width-metaCol-1))
 		meta[3] = countStyle.Render(right)
 	} else {
@@ -132,6 +133,10 @@ func (m model) compactHeader(context, subtitle, right string) string {
 	if context != "" {
 		left += dimStyle.Render(" › ") + projNameStyle.Render(context)
 	}
+	// The count is the fixed part of the line; the name yields to it.
+	if maxLeft := w - lipgloss.Width(right) - 2; maxLeft > 0 && lipgloss.Width(left) > maxLeft {
+		left = ansi.Truncate(left, maxLeft, "…")
+	}
 	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
 		gap = 1
@@ -154,6 +159,26 @@ func truncTail(s string, max int) string {
 		return s
 	}
 	return "…" + string(r[len(r)-(max-1):])
+}
+
+// wrapText breaks s into lines of at most width cells, at word boundaries where
+// it can and mid-word for words too long to fit one.
+func wrapText(s string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	return strings.Split(ansi.Wrap(s, width, ""), "\n")
+}
+
+// indented renders s wrapped to the window width, two cells in from the left
+// margin, styling each line on its own so a break never lands inside an escape
+// sequence. Used for the footer lines (help, sync, status, errors).
+func (m model) indented(style lipgloss.Style, s string) string {
+	var b strings.Builder
+	for _, ln := range wrapText(s, m.width-2) {
+		b.WriteString("  " + style.Render(ln) + "\n")
+	}
+	return b.String()
 }
 
 // displayPath abbreviates the home directory to ~ for a tidier path line.
@@ -454,12 +479,13 @@ func (m model) View() tea.View {
 	return v
 }
 
-// --- small text input with a movable cursor ---
+// --- small text input with a movable cursor and a horizontal scroll window ---
 
 type textInput struct {
 	prompt string
 	value  []rune
 	pos    int // cursor offset into value, 0..len(value)
+	off    int // first visible rune: the text slides left once it outgrows the window
 }
 
 // insert places s at the cursor and advances past it. It rebuilds the slice so
@@ -528,16 +554,88 @@ func (t *textInput) wordRight() {
 
 func (t *textInput) string() string { return string(t.value) }
 
-func (t *textInput) view() string {
-	before := string(t.value[:t.pos])
+// inputMinRoom is the smallest text window we shrink to; below that the line is
+// allowed to overflow rather than collapse to nothing.
+const inputMinRoom = 4
+
+// cells is the display width of a run of runes.
+func cells(r []rune) int { return ansi.StringWidth(string(r)) }
+
+// cursorCells is the width of the cell the cursor occupies: the rune under it,
+// or one cell for the block cursor sitting past the last rune.
+func (t *textInput) cursorCells() int {
+	if t.pos >= len(t.value) {
+		return 1
+	}
+	if w := cells(t.value[t.pos : t.pos+1]); w > 0 {
+		return w
+	}
+	return 1
+}
+
+// scroll slides the window so the cursor always stays inside room cells: out to
+// the right as you type past the edge, and back to the left as soon as the whole
+// tail fits again (after a deletion, or after jumping back with home/left).
+func (t *textInput) scroll(room int) {
+	if t.off > t.pos {
+		t.off = t.pos
+	}
+	for t.off < t.pos && cells(t.value[t.off:t.pos])+t.cursorCells() > room {
+		t.off++
+	}
+	// +1 keeps a cell free for the block cursor that follows the last rune.
+	for t.off > 0 && cells(t.value[t.off-1:])+1 <= room {
+		t.off--
+	}
+}
+
+// visibleEnd is the exclusive rune index where the window ends: as many runes
+// past off as fit in room cells.
+func (t *textInput) visibleEnd(room int) int {
+	w, i := 0, t.off
+	for ; i < len(t.value); i++ {
+		cw := cells(t.value[i : i+1])
+		if w+cw > room {
+			break
+		}
+		w += cw
+	}
+	return i
+}
+
+func (t *textInput) view(width int) string {
+	// Left margin, prompt, the 1-cell gap after it (which doubles as the
+	// clipped-head marker, so the text column never moves), a 1-cell slot for
+	// the clipped-tail marker, and one spare column so the cursor never lands
+	// in the last cell of the line.
+	room := width - 2 - ansi.StringWidth(t.prompt) - 1 - 1 - 1
+	if room < inputMinRoom {
+		room = inputMinRoom
+	}
+	t.scroll(room)
+	end := t.visibleEnd(room)
+	if t.pos < len(t.value) && end <= t.pos {
+		end = t.pos + 1 // the cell under the cursor is always shown
+	}
+
+	lead := " "
+	if t.off > 0 {
+		lead = dimStyle.Render("…")
+	}
+	trail := ""
+	if end < len(t.value) {
+		trail = dimStyle.Render("…")
+	}
+
+	before := string(t.value[t.off:t.pos])
 	var cur, after string
 	if t.pos < len(t.value) {
 		cur = cursorStyle.Reverse(true).Render(string(t.value[t.pos]))
-		after = string(t.value[t.pos+1:])
+		after = string(t.value[t.pos+1 : end])
 	} else {
 		cur = cursorStyle.Render("▌")
 	}
-	return "  " + cursorStyle.Render(t.prompt+" ") + before + cur + after
+	return "  " + cursorStyle.Render(t.prompt) + lead + before + cur + after + trail
 }
 
 // sanitize flattens newlines and tabs from pasted text to spaces so a multi-line
