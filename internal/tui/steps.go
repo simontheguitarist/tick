@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/simontheguitarist/tick/internal/protocol"
@@ -23,27 +24,50 @@ type displayRow struct {
 	num       int  // 1-based priority position among open steps (0 = none, e.g. done rows)
 }
 
-func (r displayRow) render() string {
+// cursorCol is the width of the "> " selection gutter every row starts with.
+const cursorCol = 2
+
+// render lays the row out for a window width cells wide: the prefix and the
+// first chunk of text on one line, the rest wrapped underneath with a hanging
+// indent so continuations line up under the text instead of under the number.
+func (r displayRow) render(cursor string, width int) []string {
+	var head string
+	style := lipgloss.NewStyle()
 	if r.crossed || r.done {
-		return checkStyle.Render("✓ ") + doneStyle.Render(r.text)
+		head, style = checkStyle.Render("✓ "), doneStyle
+	} else {
+		flag := "  " // constant-width slot so importance never shifts columns
+		if r.important {
+			flag = importantStyle.Render("! ")
+			style = importantTextStyle
+		}
+		head = flag + numStyle.Render(stepNumLabel(r.num))
 	}
-	flag := "  " // constant-width slot so importance never shifts columns
-	text := r.text
-	if r.important {
-		flag = importantStyle.Render("! ")
-		text = importantTextStyle.Render(text)
+	col := r.textCol()
+	segs := wrapText(r.text, width-col)
+	lines := make([]string, 0, len(segs))
+	for i, seg := range segs {
+		if i == 0 {
+			lines = append(lines, cursor+head+style.Render(seg))
+			continue
+		}
+		lines = append(lines, strings.Repeat(" ", col)+style.Render(seg))
 	}
-	return flag + numStyle.Render(stepNumLabel(r.num)) + text
+	return lines
 }
 
 // stepNumLabel formats the priority position shown left of an open step.
 func stepNumLabel(num int) string { return fmt.Sprintf("%d. ", num) }
 
-// stepPrefixWidth is the cell width of everything left of a step's text — the
-// "> " cursor column, the importance slot, and the number label. The confetti
-// origin and the renderer share it so the burst always centers on the text.
-func stepPrefixWidth(num int) int {
-	return 2 /* "> " */ + 2 /* importance slot */ + ansi.StringWidth(stepNumLabel(num))
+// textCol is the column where a row's text starts — the cursor gutter plus the
+// importance slot and number label, or the "✓ " check once the step is done. The
+// renderer's hanging indent and the confetti origin share it, so the burst
+// always centers on the text as it is drawn.
+func (r displayRow) textCol() int {
+	if r.crossed || r.done {
+		return cursorCol + 2 // "✓ "
+	}
+	return cursorCol + 2 /* importance slot */ + ansi.StringWidth(stepNumLabel(r.num))
 }
 
 // animState is a snapshot of the visible rows, held while a burst plays so the
@@ -122,31 +146,36 @@ func (m model) stepsView() string {
 		rows = m.anim.rows
 	}
 	if len(rows) == 0 {
-		b.WriteString("  " + dimStyle.Render("no steps yet — press ") + cursorStyle.Render("a") + dimStyle.Render(" to add one") + "\n")
+		hint := dimStyle.Render("no steps yet — press ") + cursorStyle.Render("a") + dimStyle.Render(" to add one")
+		for _, ln := range wrapText(hint, m.width-2) {
+			b.WriteString("  " + ln + "\n")
+		}
 	}
 	for i, r := range rows {
 		cursor := "  "
 		if i == m.stCursor && m.anim == nil && m.input == nil {
 			cursor = cursorStyle.Render("> ")
 		}
-		b.WriteString(cursor + r.render() + "\n")
+		for _, ln := range r.render(cursor, m.width) {
+			b.WriteString(ln + "\n")
+		}
 	}
 
 	b.WriteString("\n")
 	if m.input != nil {
-		b.WriteString(m.input.view() + "\n")
-		b.WriteString("  " + helpStyle.Render("enter save · esc cancel") + "\n")
+		b.WriteString(m.input.view(m.width) + "\n")
+		b.WriteString(m.indented(helpStyle, "enter save · esc cancel"))
 	} else {
-		b.WriteString("  " + helpStyle.Render("x done · a add · e edit · i ! · t top · ⇧↑/↓ move · d del · u undo · y copy · h show-done · esc back · q quit") + "\n")
+		b.WriteString(m.indented(helpStyle, "x done · a add · e edit · i ! · t top · ⇧↑/↓ move · d del · u undo · y copy · h show-done · esc back · q quit"))
 	}
 	if m.syncInfo != "" {
-		b.WriteString("  " + dimStyle.Render("⇅ "+m.syncInfo) + "\n")
+		b.WriteString(m.indented(dimStyle, "⇅ "+m.syncInfo))
 	}
 	if m.status != "" {
-		b.WriteString("  " + statusStyle.Render(m.status) + "\n")
+		b.WriteString(m.indented(statusStyle, m.status))
 	}
 	if m.err != nil {
-		b.WriteString("  " + errStyle.Render(m.err.Error()) + "\n")
+		b.WriteString(m.indented(errStyle, m.err.Error()))
 	}
 	return b.String()
 }
@@ -413,12 +442,19 @@ func (m model) crossOff(idxs []int) (tea.Model, tea.Cmd) {
 	}
 	m.st = s
 
-	row := m.stepsTopRows() + m.stCursor
-	num := 0
-	if m.stCursor < len(snap) {
-		num = snap[m.stCursor].num
+	// Rows wrap, so the burst row is the summed height of everything above it.
+	row := m.stepsTopRows()
+	for i := 0; i < m.stCursor && i < len(snap); i++ {
+		row += len(snap[i].render("  ", m.width))
 	}
-	originX := float64(stepPrefixWidth(num) + ansi.StringWidth(text)/2)
+	col, first := cursorCol+2, text
+	if m.stCursor < len(snap) {
+		col = snap[m.stCursor].textCol()
+		if segs := wrapText(text, m.width-col); len(segs) > 0 {
+			first = segs[0] // center on the first line, the only one the burst covers
+		}
+	}
+	originX := float64(col + ansi.StringWidth(first)/2)
 	if max := float64(m.width - 1); originX > max {
 		originX = max
 	}
